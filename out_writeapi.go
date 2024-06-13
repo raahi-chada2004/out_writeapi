@@ -14,11 +14,16 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
+	"github.com/xuri/excelize/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+)
+import (
+	"strconv"
+	"time"
 )
 
 var (
@@ -30,6 +35,10 @@ var (
 	tableID       string
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
+	prevTime      time.Time
+	excelFile     *excelize.File
+	excelName     = "Sheet1"
+	rowIndex      = 2
 )
 
 // This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
@@ -164,6 +173,10 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
+	excelFile = excelize.NewFile()
+	excelFile.SetCellValue(excelName, "A1", "Number of MegaBytes")
+	excelFile.SetCellValue(excelName, "B1", "Flush Interval (Seconds)")
+
 	return output.FLB_OK
 }
 
@@ -173,6 +186,8 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
+	count := 0
+	numBytes := 0
 	// Iterate Records
 	for {
 		// Extract Record
@@ -182,6 +197,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		}
 
 		row := parseMap(record)
+		count++
 
 		//serialize data
 
@@ -192,6 +208,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			return output.FLB_ERROR
 		}
 		binaryData = append(binaryData, buf)
+		numBytes += len(buf)
 
 	}
 
@@ -205,6 +222,20 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		return output.FLB_ERROR
 	}
 	results = append(results, stream)
+	currTime := time.Now()
+
+	//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
+	//log.Printf("%d \n", count)
+	excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(numBytes) / float64(1000000)))
+
+	if !prevTime.IsZero() {
+		interval := currTime.Sub(prevTime).Seconds()
+		//log.Printf("%.2f \n", interval)
+		excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
+	}
+
+	rowIndex++
+	prevTime = currTime
 
 	// Checks if all results were successful
 	for k, v := range results {
@@ -216,8 +247,11 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		}
 		log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 	}
+	if err := excelFile.SaveAs("flbstats.xlsx"); err != nil {
+		log.Fatalf("couldn't save excel:%v", err)
+	}
 
-	log.Println("Done")
+	log.Println("Done.")
 
 	return output.FLB_OK
 }
@@ -242,4 +276,5 @@ func FLBPluginExit() int {
 }
 
 func main() {
+
 }

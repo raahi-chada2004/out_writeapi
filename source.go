@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"time"
 )
@@ -15,6 +16,14 @@ type log_entry struct {
 	Text string `json:"Text"`
 }
 
+func randText() string {
+	const set = "qwertyuiopasdfghjklzxcvbnm"
+	randBytes := make([]byte, 1000)
+	for i := range randBytes {
+		randBytes[i] = set[rand.Intn(len(set))]
+	}
+	return string(randBytes)
+}
 func main() {
 	file, err := os.OpenFile("logfile.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	logger := log.New(file, "", 0)
@@ -22,11 +31,18 @@ func main() {
 		fmt.Println("Error opening file:", err)
 		os.Exit(1)
 	}
+	defer file.Close()
 
-	for {
+	currtime := time.NewTicker(time.Second / time.Duration(1024*2))
+	defer currtime.Stop()
+
+	endtime := time.Now().Add(200 * time.Second)
+
+	for time.Now().Before(endtime) {
+		<-currtime.C
 		curr := log_entry{
 			Time: time.Now().Format(time.RFC3339),
-			Text: "Hello World!",
+			Text: randText(),
 		}
 		entry, err := json.Marshal(curr)
 		if err != nil {
@@ -35,6 +51,5 @@ func main() {
 		}
 
 		logger.Println(string(entry))
-		time.Sleep(time.Second)
 	}
 }
