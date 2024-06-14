@@ -35,10 +35,12 @@ var (
 	tableID       string
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
+	results       []*managedwriter.AppendResult
 	prevTime      time.Time
 	excelFile     *excelize.File
 	excelName     = "Sheet1"
 	rowIndex      = 2
+	maxChunkSize  = float64(9)
 )
 
 // This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
@@ -146,6 +148,16 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	datasetID = output.FLBPluginConfigKey(plugin, "DatasetID")
 	tableID = output.FLBPluginConfigKey(plugin, "TableID")
 
+	//optional maxchunksize param
+	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
+	if str != "" {
+		maxChunkSize, err = strconv.ParseFloat(str, 64)
+		if err != nil {
+			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
+			maxChunkSize = 9
+		}
+	}
+
 	//create new client
 	client, err = managedwriter.NewClient(ctx, projectID)
 	if err != nil {
@@ -186,8 +198,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
-	count := 0
-	numBytes := 0
+	var currsize int
 	// Iterate Records
 	for {
 		// Extract Record
@@ -197,7 +208,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		}
 
 		row := parseMap(record)
-		count++
 
 		//serialize data
 
@@ -207,51 +217,72 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			log.Fatal("converting from json to binary failed: ", err)
 			return output.FLB_ERROR
 		}
+
+		if float64(currsize+len(buf)) > float64(maxChunkSize*1024*1024) {
+			// Appending Rows
+			stream, err := managedStream.AppendRows(ctx, binaryData)
+			if err != nil {
+				log.Fatal("AppendRows: ", err)
+				return output.FLB_ERROR
+			}
+			results = append(results, stream)
+
+			log.Println("Done")
+
+			currTime := time.Now()
+
+			//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
+			//log.Printf("%d \n", count)
+			excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(currsize) / float64(1024*1024)))
+
+			if !prevTime.IsZero() {
+				interval := currTime.Sub(prevTime).Seconds()
+				//log.Printf("%.2f \n", interval)
+				excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
+			}
+
+			rowIndex++
+			prevTime = currTime
+
+			binaryData = nil
+			currsize = 0
+
+		}
 		binaryData = append(binaryData, buf)
-		numBytes += len(buf)
+		currsize += len(buf)
 
 	}
 
-	// Checking Results Async (will check at end)
-	var results []*managedwriter.AppendResult
-
-	// Appending Rows
-	stream, err := managedStream.AppendRows(ctx, binaryData)
-	if err != nil {
-		log.Fatal("AppendRows: ", err)
-		return output.FLB_ERROR
-	}
-	results = append(results, stream)
-	currTime := time.Now()
-
-	//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
-	//log.Printf("%d \n", count)
-	excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(numBytes) / float64(1000000)))
-
-	if !prevTime.IsZero() {
-		interval := currTime.Sub(prevTime).Seconds()
-		//log.Printf("%.2f \n", interval)
-		excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
-	}
-
-	rowIndex++
-	prevTime = currTime
-
-	// Checks if all results were successful
-	for k, v := range results {
-		// GetResult blocks until we receive a response from the API.
-		recvOffset, err := v.GetResult(ctx)
+	if len(binaryData) > 0 {
+		// Appending Rows
+		stream, err := managedStream.AppendRows(ctx, binaryData)
 		if err != nil {
-			log.Fatalf("append %d returned error: %v", k, err)
+			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
-		log.Printf("Successfully appended data at offset %d.\n", recvOffset)
+		results = append(results, stream)
+
+		currTime := time.Now()
+
+		//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
+		//log.Printf("%d \n", count)
+		excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(currsize) / float64(1000000)))
+
+		if !prevTime.IsZero() {
+			interval := currTime.Sub(prevTime).Seconds()
+			//log.Printf("%.2f \n", interval)
+			excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
+		}
+
+		rowIndex++
+		prevTime = currTime
+
+		log.Println("Done")
 	}
+
 	if err := excelFile.SaveAs("flbstats.xlsx"); err != nil {
 		log.Fatalf("couldn't save excel:%v", err)
 	}
-
-	log.Println("Done.")
 
 	return output.FLB_OK
 }
@@ -272,9 +303,19 @@ func FLBPluginExit() int {
 		}
 	}
 
+	// Checks if all results were successful
+	for k, v := range results {
+		// GetResult blocks until we receive a response from the API.
+		recvOffset, err := v.GetResult(ctx)
+		if err != nil {
+			log.Fatalf("append %d returned error: %v", k, err)
+			return output.FLB_ERROR
+		}
+		log.Printf("Successfully appended data at offset %d.\n", recvOffset)
+	}
+
 	return output.FLB_OK
 }
 
 func main() {
-
 }
