@@ -148,7 +148,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		maxChunkSize, err = strconv.ParseFloat(str, 64)
 		if err != nil {
 			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
-			maxChunkSize = 9
+			maxChunkSize = 9.0
+		}
+		if maxChunkSize > 9.0 {
+			log.Println("A single call to AppendRows cannot exceed 9 MB.")
+			maxChunkSize = 9.0
 		}
 	}
 
