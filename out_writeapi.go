@@ -14,7 +14,6 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
-	"github.com/xuri/excelize/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -23,7 +22,6 @@ import (
 )
 import (
 	"strconv"
-	"time"
 )
 
 var (
@@ -36,10 +34,6 @@ var (
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
 	results       []*managedwriter.AppendResult
-	prevTime      time.Time
-	excelFile     *excelize.File
-	excelName     = "Sheet1"
-	rowIndex      = 2
 	maxChunkSize  = float64(9)
 )
 
@@ -185,10 +179,6 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	excelFile = excelize.NewFile()
-	excelFile.SetCellValue(excelName, "A1", "Number of MegaBytes")
-	excelFile.SetCellValue(excelName, "B1", "Flush Interval (Seconds)")
-
 	return output.FLB_OK
 }
 
@@ -229,21 +219,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 			log.Println("Done")
 
-			currTime := time.Now()
-
-			//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
-			//log.Printf("%d \n", count)
-			excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(currsize) / float64(1024*1024)))
-
-			if !prevTime.IsZero() {
-				interval := currTime.Sub(prevTime).Seconds()
-				//log.Printf("%.2f \n", interval)
-				excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
-			}
-
-			rowIndex++
-			prevTime = currTime
-
 			binaryData = nil
 			currsize = 0
 
@@ -262,26 +237,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		}
 		results = append(results, stream)
 
-		currTime := time.Now()
-
-		//log.Printf("%.3f \n", (float64(numBytes) / float64(1000000)))
-		//log.Printf("%d \n", count)
-		excelFile.SetCellValue(excelName, "A"+strconv.Itoa(rowIndex), (float64(currsize) / float64(1000000)))
-
-		if !prevTime.IsZero() {
-			interval := currTime.Sub(prevTime).Seconds()
-			//log.Printf("%.2f \n", interval)
-			excelFile.SetCellValue(excelName, "B"+strconv.Itoa(rowIndex), interval)
-		}
-
-		rowIndex++
-		prevTime = currTime
-
 		log.Println("Done")
-	}
-
-	if err := excelFile.SaveAs("flbstats.xlsx"); err != nil {
-		log.Fatalf("couldn't save excel:%v", err)
 	}
 
 	return output.FLB_OK
