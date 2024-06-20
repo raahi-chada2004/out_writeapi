@@ -124,6 +124,39 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	return m
 }
 
+// this function is used for asynchronous WriteAPI response checking
+// it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
+// and wait for the next response from WriteAPI
+func checkResponses(currQueue []*managedwriter.AppendResult, waitForResponse bool) int {
+	for len(currQueue) > 0 {
+		queueHead := currQueue[0]
+		if waitForResponse {
+			recvOffset, err := queueHead.GetResult(ctx)
+			currQueue = currQueue[1:]
+			if err != nil {
+				log.Fatal("error in checking responses")
+				return 0
+			}
+			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
+		} else {
+			select {
+			case <-queueHead.Ready():
+				recvOffset, err := queueHead.GetResult(ctx)
+				currQueue = currQueue[1:]
+				if err != nil {
+					log.Fatal("error in checking responses")
+					return 0
+				}
+				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
+			default:
+				return 1
+			}
+		}
+
+	}
+	return 1
+}
+
 //export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
 	return output.FLBPluginRegister(def, "writeapi", "Sends data to BigQuery through WriteAPI")
@@ -188,7 +221,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
-
+	responseErr := checkResponses(results, false)
+	if responseErr == 0 {
+		log.Fatal("error in checking responses noticed in flush")
+		return output.FLB_ERROR
+	}
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
@@ -249,6 +286,12 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginExit
 func FLBPluginExit() int {
+	responseErr := checkResponses(results, true)
+	if responseErr == 0 {
+		log.Fatal("error in checking responses noticed in flush")
+		return output.FLB_ERROR
+	}
+
 	if managedStream != nil {
 		if err = managedStream.Close(); err != nil {
 			log.Printf("Couldn't close managed stream:%v", err)
@@ -261,17 +304,6 @@ func FLBPluginExit() int {
 			log.Printf("Couldn't close managed writer client:%v", err)
 			return output.FLB_ERROR
 		}
-	}
-
-	// Checks if all results were successful
-	for k, v := range results {
-		// GetResult blocks until we receive a response from the API.
-		recvOffset, err := v.GetResult(ctx)
-		if err != nil {
-			log.Fatalf("append %d returned error: %v", k, err)
-			return output.FLB_ERROR
-		}
-		log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 	}
 
 	return output.FLB_OK
