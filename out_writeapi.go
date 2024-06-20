@@ -127,12 +127,12 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-func checkResponses(currQueue []*managedwriter.AppendResult, waitForResponse bool) int {
-	for len(currQueue) > 0 {
-		queueHead := currQueue[0]
+func checkResponses(currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
+	for len(*currQueuePointer) > 0 {
+		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := queueHead.GetResult(ctx)
-			currQueue = currQueue[1:]
+			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
 				return 0
@@ -142,7 +142,7 @@ func checkResponses(currQueue []*managedwriter.AppendResult, waitForResponse boo
 			select {
 			case <-queueHead.Ready():
 				recvOffset, err := queueHead.GetResult(ctx)
-				currQueue = currQueue[1:]
+				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
 					return 0
@@ -221,7 +221,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
-	responseErr := checkResponses(results, false)
+	responseErr := checkResponses(&results, false)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
@@ -286,7 +286,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginExit
 func FLBPluginExit() int {
-	responseErr := checkResponses(results, true)
+	responseErr := checkResponses(&results, true)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
