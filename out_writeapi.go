@@ -189,6 +189,30 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		}
 	}
 
+	//optional max queue size params
+	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
+	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_MB")
+	var queueSize int
+	var queueMBSize int
+	if str1 == "" {
+		queueSize = 1000
+	} else {
+		queueSize, err = strconv.Atoi(str1)
+		if err != nil {
+			log.Printf("Invalid Max Queue Requests, defaulting to 1000:%v", err)
+			queueSize = 1000
+		}
+	}
+	if str2 == "" {
+		queueMBSize = 100
+	} else {
+		queueMBSize, err = strconv.Atoi(str2)
+		if err != nil {
+			log.Printf("Invalid Max Queue MB, defaulting to 100:%v", err)
+			queueMBSize = 100
+		}
+	}
+
 	//create new client
 	client, err = managedwriter.NewClient(ctx, projectID)
 	if err != nil {
@@ -210,12 +234,14 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
 		managedwriter.EnableWriteRetries(true),
+		managedwriter.WithMaxInflightBytes(queueMBSize*1024*1024),
+		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
 		log.Fatal("NewManagedStream: ", err)
 		return output.FLB_ERROR
 	}
-
+	log.Printf("max MB size: %d, max requests: %d", queueMBSize, queueSize)
 	return output.FLB_OK
 }
 
