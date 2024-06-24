@@ -41,7 +41,7 @@ var (
 // projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
 // NewManagedStream as shown in line 54 and 63 of source.go).
 
-func getDescriptors(ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -52,7 +52,7 @@ func getDescriptors(ctx context.Context, managed_writer_client *managedwriter.Cl
 	}
 
 	//call getwritestream to get data on the table
-	table_data, err2 := managed_writer_client.GetWriteStream(ctx, &req)
+	table_data, err2 := managed_writer_client.GetWriteStream(curr_ctx, &req)
 	if err2 != nil {
 		log.Fatalf("getWriteStream command failed: %v", err2)
 	}
@@ -127,11 +127,11 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-func checkResponses(currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
-			recvOffset, err := queueHead.GetResult(ctx)
+			recvOffset, err := queueHead.GetResult(curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
@@ -141,7 +141,7 @@ func checkResponses(currQueuePointer *[]*managedwriter.AppendResult, waitForResp
 		} else {
 			select {
 			case <-queueHead.Ready():
-				recvOffset, err := queueHead.GetResult(ctx)
+				recvOffset, err := queueHead.GetResult(curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
@@ -247,7 +247,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
-	responseErr := checkResponses(&results, false)
+	responseErr := checkResponses(ctx, &results, false)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
@@ -312,7 +312,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginExit
 func FLBPluginExit() int {
-	responseErr := checkResponses(&results, true)
+	responseErr := checkResponses(ctx, &results, true)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
