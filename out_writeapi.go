@@ -1,5 +1,3 @@
-//go:build plugin
-
 package main
 
 import (
@@ -135,7 +133,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
-				return 0
+				return 1
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
@@ -145,16 +143,16 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
-					return 0
+					return 1
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
-				return 1
+				return 0
 			}
 		}
 
 	}
-	return 1
+	return 0
 }
 
 //export FLBPluginRegister
@@ -248,7 +246,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	responseErr := checkResponses(ctx, &results, false)
-	if responseErr == 0 {
+	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
@@ -313,7 +311,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 //export FLBPluginExit
 func FLBPluginExit() int {
 	responseErr := checkResponses(ctx, &results, true)
-	if responseErr == 0 {
+	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
