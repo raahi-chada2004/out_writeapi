@@ -6,6 +6,7 @@ require (
 	bou.ke/monkey v1.0.2
 	cloud.google.com/go/bigquery v1.61.0
 	github.com/fluent/fluent-bit-go v0.0.0-20230731091245-a7a013e2473c
+	github.com/stretchr/testify v1.9.0
 	google.golang.org/protobuf v1.34.1
 )
 
@@ -32,7 +33,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.18 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/ugorji/go/codec v1.1.7 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	go.opencensus.io v0.24.0 // indirect
