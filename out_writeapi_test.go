@@ -32,7 +32,7 @@ func TestFLBPluginRegister(t *testing.T) {
 
 	result := FLBPluginRegister(nil)
 
-	assert.Equal(t, 0, result, "Expected result to be 1")
-	assert.Equal(t, "writeapi", currplugin.name, "Expected name to be writeapi, got %s", currplugin.name)
+	assert.Equal(t, 0, result)
+	assert.Equal(t, "writeapi", currplugin.name)
 
 }
