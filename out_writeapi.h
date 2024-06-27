@@ -81,7 +81,10 @@ extern GoInt FLBPluginRegister(void* def);
 //
 extern GoInt FLBPluginInit(void* plugin);
 extern GoInt FLBPluginFlush(void* data, int length, char* tag);
+extern GoInt FLBPluginFlushCtx(void* ctx, void* data, int length, char* tag);
 extern GoInt FLBPluginExit();
+extern GoInt FLBPluginExitCtx(void* ctx);
+extern void FLBPluginUnregister(void* def);
 
 #ifdef __cplusplus
 }

@@ -1,3 +1,5 @@
+//go:build plugin
+
 package main
 
 import (
@@ -22,17 +24,20 @@ import (
 	"strconv"
 )
 
-var (
-	err           error
-	ctx           context.Context
-	client        *managedwriter.Client
-	projectID     string
-	datasetID     string
-	tableID       string
+// Struct for each stream - one stream per output
+type StreamConfig struct {
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
+	client        *managedwriter.Client
+	maxChunkSize  float64
 	results       []*managedwriter.AppendResult
-	maxChunkSize  = (9 * 1024 * 1024)
+}
+
+var (
+	err       error
+	ms_ctx    = context.Background()
+	configMap = make(map[string]StreamConfig)
+	counter   = 0
 )
 
 // This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
@@ -165,33 +170,36 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 //
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
-	//create context
-	ctx = context.Background()
+	// Creating FLB context for each output, enables multiinstancing
+	outputID := output.FLBPluginConfigKey(plugin, "OutputID")
+	log.Printf("[multiinstance] Init called for: %s", outputID)
+	output.FLBPluginSetContext(plugin, outputID)
 
 	//set projectID, datasetID, and tableID from config file params
-	projectID = output.FLBPluginConfigKey(plugin, "ProjectID")
-	datasetID = output.FLBPluginConfigKey(plugin, "DatasetID")
-	tableID = output.FLBPluginConfigKey(plugin, "TableID")
+	projectID := output.FLBPluginConfigKey(plugin, "ProjectID")
+	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
+	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
 	//optional maxchunksize param
 	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
+	var maxChunkSize float64
 	if str != "" {
-		maxChunkSize, err = strconv.Atoi(str)
+		maxChunkSize, err := strconv.ParseFloat(str, 64)
 		if err != nil {
-			log.Printf("Invalid Max Chunk Size, defaulting to 9 MB:%v", err)
-			maxChunkSize = 9 * 1024 * 1024
+			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
+			maxChunkSize = 9.0
 		}
-		if maxChunkSize > 9*1024*1024 {
+		if maxChunkSize > 9.0 {
 			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize = 9 * 1024 * 1024
+			maxChunkSize = 9.0
 		}
 	}
 
 	//optional max queue size params
 	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
-	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
+	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_MB")
 	var queueSize int
-	var queueByteSize int
+	var queueMBSize int
 	if str1 == "" {
 		queueSize = 1000
 	} else {
@@ -202,54 +210,94 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		}
 	}
 	if str2 == "" {
-		queueByteSize = (100 * 1024 * 1024)
+		queueMBSize = 100
 	} else {
-		queueByteSize, err = strconv.Atoi(str2)
+		queueMBSize, err = strconv.Atoi(str2)
 		if err != nil {
-			log.Printf("Invalid Max Queue MB, defaulting to 100 MB:%v", err)
-			queueByteSize = (100 * 1024 * 1024)
+			log.Printf("Invalid Max Queue MB, defaulting to 100:%v", err)
+			queueMBSize = 100
 		}
 	}
 
 	//create new client
-	client, err = managedwriter.NewClient(ctx, projectID)
+	client, err := managedwriter.NewClient(ms_ctx, projectID)
 	if err != nil {
 		log.Fatal(err)
 		return output.FLB_ERROR
 	}
 
 	//use getDescriptors to get the message descriptor, and descriptor proto
-	var descriptor *descriptorpb.DescriptorProto
-	md, descriptor = getDescriptors(ctx, client, projectID, datasetID, tableID)
+	md, descriptor := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
 
 	// streamname
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
 	// Create stream using NewManagedStream
-	managedStream, err = client.NewManagedStream(ctx,
+	managedStream, err := client.NewManagedStream(ms_ctx,
 		managedwriter.WithType(managedwriter.DefaultStream),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
 		managedwriter.EnableWriteRetries(true),
-		managedwriter.WithMaxInflightBytes(queueByteSize),
+		managedwriter.WithMaxInflightBytes(queueMBSize*1024*1024),
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
 		log.Fatal("NewManagedStream: ", err)
 		return output.FLB_ERROR
 	}
-	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
+
+	log.Printf("max MB size: %d, max requests: %d", queueMBSize, queueSize)
+
+	var results []*managedwriter.AppendResult
+
+	// Instantiates stream
+	config := StreamConfig{
+		md:            md,
+		managedStream: managedStream,
+		client:        client,
+		maxChunkSize:  maxChunkSize,
+		results:       results,
+	}
+
+	configMap[outputID] = config
+
 	return output.FLB_OK
 }
 
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
-	responseErr := checkResponses(ctx, &results, false)
+	log.Print("[multiinstance] Flush called for unknown instance")
+	return output.FLB_OK
+}
+
+//export FLBPluginFlushCtx
+func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
+	// Get Fluentbit Context
+	id := output.FLBPluginGetContext(ctx).(string)
+	log.Printf("[multiinstance] Flush called for id: %s", id)
+	counter = counter + 1
+
+	log.Printf("Counter: %d", counter)
+
+	// Locate stream in map
+	// Look up through reference
+	config, ok := configMap[id]
+	if !ok {
+		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		return output.FLB_OK
+	}
+
+	log.Printf("Address: %p", config)
+	log.Printf("Address 2: %p", config.results)
+	log.Printf("len before checkResponses: %d", len(config.results))
+
+	responseErr := checkResponses(ms_ctx, &config.results, false)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
+
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
@@ -267,22 +315,23 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		//serialize data
 
 		//transform each row of data into binary using the json_to_binary function and the message descriptor from the getDescriptors function
-		buf, err := json_to_binary(md, row)
+		buf, err := json_to_binary(config.md, row)
 		if err != nil {
 			log.Fatal("converting from json to binary failed: ", err)
 			return output.FLB_ERROR
 		}
 
-		if ((currsize + len(buf)) > maxChunkSize) && len(binaryData) != 0 {
+		if float64(currsize+len(buf)) > float64(config.maxChunkSize*1024*1024) {
 			// Appending Rows
-			stream, err := managedStream.AppendRows(ctx, binaryData)
+			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 			if err != nil {
 				log.Fatal("AppendRows: ", err)
 				return output.FLB_ERROR
 			}
-			results = append(results, stream)
+			config.results = append(config.results, stream)
 
-			log.Println("Done")
+			// log.Printf("len in loop: %d", len(config.results))
+			// log.Println("Done")
 
 			binaryData = nil
 			currsize = 0
@@ -295,42 +344,69 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 	if len(binaryData) > 0 {
 		// Appending Rows
-		stream, err := managedStream.AppendRows(ctx, binaryData)
+		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
 			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
-		results = append(results, stream)
+		config.results = append(config.results, stream)
 
 		log.Println("Done")
 	}
+
+	log.Printf("len at end: %d", len(config.results))
 
 	return output.FLB_OK
 }
 
 //export FLBPluginExit
 func FLBPluginExit() int {
-	responseErr := checkResponses(ctx, &results, true)
+	log.Print("[multiinstance] Exit called for unknown instance")
+	return output.FLB_OK
+}
+
+//export FLBPluginExitCtx
+func FLBPluginExitCtx(ctx unsafe.Pointer) int {
+	// Get context
+	id := output.FLBPluginGetContext(ctx).(string)
+	log.Printf("[multiinstance] Flush called for id: %s", id)
+
+	// Locate stream in map
+	// Might be a copy
+	// Make a reference
+	config, ok := configMap[id]
+	if !ok {
+		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		return output.FLB_OK
+	}
+
+	responseErr := checkResponses(ms_ctx, &config.results, true)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
 
-	if managedStream != nil {
-		if err = managedStream.Close(); err != nil {
+	if config.managedStream != nil {
+		if err = config.managedStream.Close(); err != nil {
 			log.Printf("Couldn't close managed stream:%v", err)
 			return output.FLB_ERROR
 		}
 	}
 
-	if client != nil {
-		if err = client.Close(); err != nil {
+	if config.client != nil {
+		if err = config.client.Close(); err != nil {
 			log.Printf("Couldn't close managed writer client:%v", err)
 			return output.FLB_ERROR
 		}
 	}
 
 	return output.FLB_OK
+}
+
+//export FLBPluginUnregister
+func FLBPluginUnregister(def unsafe.Pointer) {
+	log.Print("[multiinstance] Unregister called")
+	output.FLBPluginUnregister(def)
 }
 
 func main() {
