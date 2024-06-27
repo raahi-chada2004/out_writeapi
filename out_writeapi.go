@@ -32,7 +32,7 @@ var (
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
 	results       []*managedwriter.AppendResult
-	maxChunkSize  = float64(9)
+	maxChunkSize  = (9 * 1024 * 1024)
 )
 
 // This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
@@ -133,7 +133,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
-				return 1
+				return 0
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
@@ -143,16 +143,16 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
-					return 1
+					return 0
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
-				return 0
+				return 1
 			}
 		}
 
 	}
-	return 0
+	return 1
 }
 
 //export FLBPluginRegister
@@ -176,22 +176,22 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	//optional maxchunksize param
 	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
 	if str != "" {
-		maxChunkSize, err = strconv.ParseFloat(str, 64)
+		maxChunkSize, err = strconv.Atoi(str)
 		if err != nil {
-			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
-			maxChunkSize = 9.0
+			log.Printf("Invalid Max Chunk Size, defaulting to 9 MB:%v", err)
+			maxChunkSize = 9 * 1024 * 1024
 		}
-		if maxChunkSize > 9.0 {
+		if maxChunkSize > 9*1024*1024 {
 			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize = 9.0
+			maxChunkSize = 9 * 1024 * 1024
 		}
 	}
 
 	//optional max queue size params
 	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
-	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_MB")
+	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
 	var queueSize int
-	var queueMBSize int
+	var queueByteSize int
 	if str1 == "" {
 		queueSize = 1000
 	} else {
@@ -202,12 +202,12 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		}
 	}
 	if str2 == "" {
-		queueMBSize = 100
+		queueByteSize = (100 * 1024 * 1024)
 	} else {
-		queueMBSize, err = strconv.Atoi(str2)
+		queueByteSize, err = strconv.Atoi(str2)
 		if err != nil {
-			log.Printf("Invalid Max Queue MB, defaulting to 100:%v", err)
-			queueMBSize = 100
+			log.Printf("Invalid Max Queue MB, defaulting to 100 MB:%v", err)
+			queueByteSize = (100 * 1024 * 1024)
 		}
 	}
 
@@ -232,21 +232,21 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
 		managedwriter.EnableWriteRetries(true),
-		managedwriter.WithMaxInflightBytes(queueMBSize*1024*1024),
+		managedwriter.WithMaxInflightBytes(queueByteSize),
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
 		log.Fatal("NewManagedStream: ", err)
 		return output.FLB_ERROR
 	}
-	log.Printf("max MB size: %d, max requests: %d", queueMBSize, queueSize)
+	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 	return output.FLB_OK
 }
 
 //export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	responseErr := checkResponses(ctx, &results, false)
-	if responseErr == 1 {
+	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
@@ -273,7 +273,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			return output.FLB_ERROR
 		}
 
-		if float64(currsize+len(buf)) > float64(maxChunkSize*1024*1024) {
+		if ((currsize + len(buf)) > maxChunkSize) && len(binaryData) != 0 {
 			// Appending Rows
 			stream, err := managedStream.AppendRows(ctx, binaryData)
 			if err != nil {
@@ -311,7 +311,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 //export FLBPluginExit
 func FLBPluginExit() int {
 	responseErr := checkResponses(ctx, &results, true)
-	if responseErr == 1 {
+	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}

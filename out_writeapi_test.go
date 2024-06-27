@@ -9,12 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// this is a mock struct describing the states of the plugin after being register
 type MockFLBPlugin struct {
 	name string
 	desc string
 }
 
-// this function checks if the name parameter in FLBPluginRegister is always "writeapi"
+// this function mocks output.FLBPluginRegister by setting the fields of the MockFLBPlugin struct to the input parameter
+// and returning a 0 (to imply success)
 func (m *MockFLBPlugin) mockOutputRegister(def unsafe.Pointer, currname string, currdesc string) int {
 	m.name = currname
 	m.desc = currdesc
@@ -32,7 +34,7 @@ func TestFLBPluginRegister(t *testing.T) {
 
 	result := FLBPluginRegister(nil)
 
-	assert.Equal(t, 0, result, "Expected result to be 1")
-	assert.Equal(t, "writeapi", currplugin.name, "Expected name to be writeapi, got %s", currplugin.name)
+	assert.Equal(t, 0, result)
+	assert.Equal(t, "writeapi", currplugin.name)
 
 }
