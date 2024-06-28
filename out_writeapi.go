@@ -36,7 +36,7 @@ type StreamConfig struct {
 var (
 	err       error
 	ms_ctx    = context.Background()
-	configMap = make(map[string]*StreamConfig)
+	configMap = make(map[int]*StreamConfig)
 	counter   = 0
 )
 
@@ -170,11 +170,6 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 //
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
-	// Creating FLB context for each output, enables multiinstancing
-	outputID := output.FLBPluginConfigKey(plugin, "OutputID")
-	log.Printf("[multiinstance] Init called for: %s", outputID)
-	output.FLBPluginSetContext(plugin, outputID)
-
 	//set projectID, datasetID, and tableID from config file params
 	projectID := output.FLBPluginConfigKey(plugin, "ProjectID")
 	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
@@ -260,7 +255,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		results:       &res_temp,
 	}
 
-	configMap[outputID] = &config
+	configMap[counter] = &config
+
+	// Creating FLB context for each output, enables multiinstancing
+	output.FLBPluginSetContext(plugin, counter)
+	counter = counter + 1
 
 	return output.FLB_OK
 }
@@ -274,8 +273,8 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
 	// Get Fluentbit Context
-	id := output.FLBPluginGetContext(ctx).(string)
-	log.Printf("[multiinstance] Flush called for id: %s", id)
+	id := output.FLBPluginGetContext(ctx).(int)
+	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
 	// Look up through reference
@@ -359,8 +358,8 @@ func FLBPluginExit() int {
 //export FLBPluginExitCtx
 func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Get context
-	id := output.FLBPluginGetContext(ctx).(string)
-	log.Printf("[multiinstance] Flush called for id: %s", id)
+	id := output.FLBPluginGetContext(ctx).(int)
+	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
 	config, ok := configMap[id]
