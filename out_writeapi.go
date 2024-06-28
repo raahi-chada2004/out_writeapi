@@ -30,13 +30,13 @@ type StreamConfig struct {
 	managedStream *managedwriter.ManagedStream
 	client        *managedwriter.Client
 	maxChunkSize  float64
-	results       []*managedwriter.AppendResult
+	results       *[]*managedwriter.AppendResult
 }
 
 var (
 	err       error
 	ms_ctx    = context.Background()
-	configMap = make(map[string]StreamConfig)
+	configMap = make(map[string]*StreamConfig)
 	counter   = 0
 )
 
@@ -182,16 +182,16 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	//optional maxchunksize param
 	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
-	var maxChunkSize float64
+	var maxChunkSize_init float64
 	if str != "" {
-		maxChunkSize, err := strconv.ParseFloat(str, 64)
+		maxChunkSize_init, err = strconv.ParseFloat(str, 64)
 		if err != nil {
 			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
-			maxChunkSize = 9.0
+			maxChunkSize_init = 9.0
 		}
-		if maxChunkSize > 9.0 {
+		if maxChunkSize_init > 9.0 {
 			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize = 9.0
+			maxChunkSize_init = 9.0
 		}
 	}
 
@@ -249,18 +249,18 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	log.Printf("max MB size: %d, max requests: %d", queueMBSize, queueSize)
 
-	var results []*managedwriter.AppendResult
+	var res_temp []*managedwriter.AppendResult
 
 	// Instantiates stream
 	config := StreamConfig{
 		md:            md,
 		managedStream: managedStream,
 		client:        client,
-		maxChunkSize:  maxChunkSize,
-		results:       results,
+		maxChunkSize:  maxChunkSize_init,
+		results:       &res_temp,
 	}
 
-	configMap[outputID] = config
+	configMap[outputID] = &config
 
 	return output.FLB_OK
 }
@@ -276,9 +276,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Get Fluentbit Context
 	id := output.FLBPluginGetContext(ctx).(string)
 	log.Printf("[multiinstance] Flush called for id: %s", id)
-	counter = counter + 1
-
-	log.Printf("Counter: %d", counter)
 
 	// Locate stream in map
 	// Look up through reference
@@ -288,11 +285,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_OK
 	}
 
-	log.Printf("Address: %p", config)
-	log.Printf("Address 2: %p", config.results)
-	log.Printf("len before checkResponses: %d", len(config.results))
-
-	responseErr := checkResponses(ms_ctx, &config.results, false)
+	responseErr := checkResponses(ms_ctx, config.results, false)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
@@ -328,7 +321,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				log.Fatal("AppendRows: ", err)
 				return output.FLB_ERROR
 			}
-			config.results = append(config.results, stream)
+			*config.results = append(*config.results, stream)
 
 			// log.Printf("len in loop: %d", len(config.results))
 			// log.Println("Done")
@@ -349,12 +342,10 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
-		config.results = append(config.results, stream)
+		*config.results = append(*config.results, stream)
 
 		log.Println("Done")
 	}
-
-	log.Printf("len at end: %d", len(config.results))
 
 	return output.FLB_OK
 }
@@ -372,15 +363,13 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	log.Printf("[multiinstance] Flush called for id: %s", id)
 
 	// Locate stream in map
-	// Might be a copy
-	// Make a reference
 	config, ok := configMap[id]
 	if !ok {
 		log.Printf("Skipping flush because config is not found for tag: %s.", id)
 		return output.FLB_OK
 	}
 
-	responseErr := checkResponses(ms_ctx, &config.results, true)
+	responseErr := checkResponses(ms_ctx, config.results, true)
 	if responseErr == 0 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
