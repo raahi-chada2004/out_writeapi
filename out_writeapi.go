@@ -138,7 +138,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
-				return 0
+				return 1
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
@@ -148,16 +148,16 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
-					return 0
+					return 1
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
-				return 1
+				return 0
 			}
 		}
 
 	}
-	return 1
+	return 0
 }
 
 //export FLBPluginRegister
