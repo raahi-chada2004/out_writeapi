@@ -1,5 +1,3 @@
-//go:build plugin
-
 package main
 
 import (
@@ -285,7 +283,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 
 	responseErr := checkResponses(ms_ctx, config.results, false)
-	if responseErr == 0 {
+	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
@@ -369,7 +367,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 
 	responseErr := checkResponses(ms_ctx, config.results, true)
-	if responseErr == 0 {
+	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
 	}
