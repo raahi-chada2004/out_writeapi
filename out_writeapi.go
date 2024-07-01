@@ -29,7 +29,7 @@ type StreamConfig struct {
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
 	client        *managedwriter.Client
-	maxChunkSize  float64
+	maxChunkSize  int
 	results       *[]*managedwriter.AppendResult
 }
 
@@ -177,24 +177,24 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	//optional maxchunksize param
 	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
-	var maxChunkSize_init float64
+	var maxChunkSize_init int
 	if str != "" {
-		maxChunkSize_init, err = strconv.ParseFloat(str, 64)
+		maxChunkSize_init, err = strconv.Atoi(str)
 		if err != nil {
-			log.Printf("Invalid Max Chunk Size, defaulting to 9:%v", err)
-			maxChunkSize_init = 9.0
+			log.Printf("Invalid Max Chunk Size, defaulting to 9 MB:%v", err)
+			maxChunkSize_init = 9 * 1024 * 1024
 		}
-		if maxChunkSize_init > 9.0 {
+		if maxChunkSize_init > 9*1024*1024 {
 			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize_init = 9.0
+			maxChunkSize_init = 9 * 1024 * 1024
 		}
 	}
 
 	//optional max queue size params
 	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
-	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_MB")
+	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
 	var queueSize int
-	var queueMBSize int
+	var queueByteSize int
 	if str1 == "" {
 		queueSize = 1000
 	} else {
@@ -205,12 +205,12 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		}
 	}
 	if str2 == "" {
-		queueMBSize = 100
+		queueByteSize = (100 * 1024 * 1024)
 	} else {
-		queueMBSize, err = strconv.Atoi(str2)
+		queueByteSize, err = strconv.Atoi(str2)
 		if err != nil {
-			log.Printf("Invalid Max Queue MB, defaulting to 100:%v", err)
-			queueMBSize = 100
+			log.Printf("Invalid Max Queue MB, defaulting to 100 MB:%v", err)
+			queueByteSize = (100 * 1024 * 1024)
 		}
 	}
 
@@ -234,7 +234,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
 		managedwriter.EnableWriteRetries(true),
-		managedwriter.WithMaxInflightBytes(queueMBSize*1024*1024),
+		managedwriter.WithMaxInflightBytes(queueByteSize),
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
@@ -242,7 +242,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	log.Printf("max MB size: %d, max requests: %d", queueMBSize, queueSize)
+	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 
 	var res_temp []*managedwriter.AppendResult
 
@@ -313,7 +313,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			return output.FLB_ERROR
 		}
 
-		if float64(currsize+len(buf)) > float64(config.maxChunkSize*1024*1024) {
+		if ((currsize + len(buf)) > config.maxChunkSize) && len(binaryData) != 0 {
 			// Appending Rows
 			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 			if err != nil {
