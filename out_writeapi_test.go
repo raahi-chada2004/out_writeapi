@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -76,11 +77,13 @@ type OptionChecks struct {
 func TestFLBPluginInit(t *testing.T) {
 	//Mock the managedwriter.NewClient with an empty client
 	patch1 := monkey.Patch(managedwriter.NewClient, func(ctx context.Context, projectID string, opts ...option.ClientOption) (*managedwriter.Client, error) {
+		log.Println("Mock NewClient called")
 		return &managedwriter.Client{}, nil
 	})
 	defer patch1.Unpatch()
 
 	patch2 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		log.Println("Mock output.FLBPluginConfigKey called")
 		switch key {
 		case "ProjectID":
 			return "bigquerytestdefault"
@@ -101,6 +104,7 @@ func TestFLBPluginInit(t *testing.T) {
 	defer patch2.Unpatch()
 
 	patch3 := monkey.PatchInstanceMethod(reflect.TypeOf(&managedwriter.Client{}), "GetWriteStream", func(m *managedwriter.Client, ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+		log.Println("Mock GetWriteStream called")
 		return &storagepb.WriteStream{
 			Name: "mockstream",
 			TableSchema: &storagepb.TableSchema{
@@ -125,7 +129,9 @@ func TestFLBPluginInit(t *testing.T) {
 
 	var currChecks OptionChecks
 	patch4 := monkey.PatchInstanceMethod(reflect.TypeOf(&managedwriter.Client{}), "NewManagedStream", func(m *managedwriter.Client, ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+		log.Println("Mock NewManagedStream called")
 		for _, opt := range opts {
+
 			if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithType(managedwriter.DefaultStream)).Pointer() {
 				currChecks.correctStreamType = true
 			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithDestinationTable(currTableReference)).Pointer() {
