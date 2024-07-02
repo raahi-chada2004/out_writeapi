@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
@@ -29,6 +30,7 @@ type StreamConfig struct {
 	client        *managedwriter.Client
 	maxChunkSize  int
 	results       *[]*managedwriter.AppendResult
+	mu            sync.Mutex
 }
 
 var (
@@ -256,8 +258,10 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	configMap[counter] = &config
 
 	// Creating FLB context for each output, enables multiinstancing
+	config.mu.Lock()
 	output.FLBPluginSetContext(plugin, counter)
 	counter = counter + 1
+	config.mu.Unlock()
 
 	return output.FLB_OK
 }
@@ -278,7 +282,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		log.Printf("Skipping flush because config is not found for tag: %d.", id)
 		return output.FLB_OK
 	}
 
@@ -362,7 +366,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		log.Printf("Skipping flush because config is not found for tag: %d.", id)
 		return output.FLB_OK
 	}
 
