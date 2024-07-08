@@ -8,6 +8,8 @@ import (
 	"log"
 	"unsafe"
 
+	"sync"
+
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
@@ -30,6 +32,7 @@ type StreamConfig struct {
 	client        ManagedWriterClient
 	maxChunkSize  int
 	results       *[]*managedwriter.AppendResult
+	mu            sync.Mutex
 }
 
 var (
@@ -287,8 +290,10 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	configMap[counter] = &config
 
 	// Creating FLB context for each output, enables multiinstancing
+	config.mu.Lock()
 	output.FLBPluginSetContext(plugin, counter)
 	counter = counter + 1
+	config.mu.Unlock()
 
 	return output.FLB_OK
 }
@@ -310,7 +315,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	config, ok := configMap[id]
 	if !ok {
 		log.Printf("Skipping flush because config is not found for tag: %d.", id)
-		return output.FLB_OK
+		return output.FLB_ERROR
 	}
 
 	responseErr := checkResponses(ms_ctx, config.results, false)
