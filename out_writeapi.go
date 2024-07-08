@@ -367,7 +367,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	config, ok := configMap[id]
 	if !ok {
 		log.Printf("Skipping flush because config is not found for tag: %d.", id)
-		return output.FLB_OK
+		return output.FLB_ERROR
 	}
 
 	responseErr := checkResponses(ms_ctx, config.results, true)
