@@ -1,6 +1,12 @@
 # Fluentbit WriteAPI Output Plugin
 
-The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file. The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
+This README inclues all the necessary information to use the WriteAPI Pipeline. 
+
+## Configuration File
+
+Fluentbit Official Guide to a Config File: https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file
+
+The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file (named something like `examplefile.config`). The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
 ```
 [SERVICE]
     Flush           1
