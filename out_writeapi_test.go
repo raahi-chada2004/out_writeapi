@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"reflect"
 	"testing"
 	"unsafe"
 
@@ -10,9 +9,6 @@ import (
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/api/option"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	"context"
 
@@ -61,29 +57,65 @@ type OptionChecks struct {
 	correctMaxInflightRequests bool
 }
 
-// func createMockPluginContext() unsafe.Pointer {
-// 	mockConfig := map[string]string{
-// 		"ProjectID":          "bigquerytestdefault",
-// 		"DatasetID":          "siddag_summer2024",
-// 		"TableID":            "raahi_summer2024table1",
-// 		"Max_Chunk_Size":     "1048576",
-// 		"Max_Queue_Requests": "100",
-// 		"Max_Queue_Bytes":    "52428800",
-// 	}
-// 	return unsafe.Pointer(&mockConfig)
-// }
+type MockManagedWriterClient struct {
+	client               *managedwriter.Client
+	NewManagedStreamFunc func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
+	GetWriteStreamFunc   func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+	CloseFunc            func() error
+}
 
-// this tests the FLBPluginInit method
+func (m *MockManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+	return m.NewManagedStreamFunc(ctx, opts...)
+}
+
+func (m *MockManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return m.GetWriteStreamFunc(ctx, req, opts...)
+}
+
+func (m *MockManagedWriterClient) Close() error {
+	return m.client.Close()
+}
+
+// TestFLBPluginInit tests the FLBPluginInit function
 func TestFLBPluginInit(t *testing.T) {
-	//Mock the managedwriter.NewClient with an empty client
-	patch1 := monkey.Patch(managedwriter.NewClient, func(ctx context.Context, projectID string, opts ...option.ClientOption) (*managedwriter.Client, error) {
-		log.Println("Mock NewClient called")
-		return &managedwriter.Client{}, nil
-	})
-	defer patch1.Unpatch()
+	// currTableReference := "projects/bigquerytestdefault/datasets/siddag_summer2024/tables/raahi_summer2024table1"
+	// SchemaDescriptor := &descriptorpb.DescriptorProto{
+	// 	Name: proto.String("root"),
+	// 	Field: []*descriptorpb.FieldDescriptorProto{
+	// 		{Name: proto.String("Time"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+	// 		{Name: proto.String("Text"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+	// 	},
+	// }
+	var currChecks OptionChecks
+	mockClient := &MockManagedWriterClient{
+		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+			log.Println("Mock NewManagedStreamFunc called")
+			return nil, nil
 
-	patch2 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
-		log.Println("Mock output.FLBPluginConfigKey called")
+		},
+		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+			log.Println("Mock GetWriteStream called")
+			return &storagepb.WriteStream{
+				Name: "mockstream",
+				TableSchema: &storagepb.TableSchema{
+					Fields: []*storagepb.TableFieldSchema{
+						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+					},
+				},
+			}, nil
+		},
+	}
+
+	originalFunc := getClient
+	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+		log.Println("Mock ManagedWriterClient called")
+		return mockClient, nil
+	}
+	defer func() { getClient = originalFunc }()
+
+	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		log.Println("Mock out.FLBPluginConfigKey called")
 		switch key {
 		case "ProjectID":
 			return "bigquerytestdefault"
@@ -101,55 +133,12 @@ func TestFLBPluginInit(t *testing.T) {
 			return ""
 		}
 	})
+	defer patch1.Unpatch()
+
+	patch2 := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
+		log.Println("Mock out.FLBPluginSetContext called")
+	})
 	defer patch2.Unpatch()
-
-	patch3 := monkey.PatchInstanceMethod(reflect.TypeOf(&managedwriter.Client{}), "GetWriteStream", func(m *managedwriter.Client, ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
-		log.Println("Mock GetWriteStream called")
-		return &storagepb.WriteStream{
-			Name: "mockstream",
-			TableSchema: &storagepb.TableSchema{
-				Fields: []*storagepb.TableFieldSchema{
-					{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
-					{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
-				},
-			},
-		}, nil
-	})
-
-	defer patch3.Unpatch()
-
-	currTableReference := "projects/bigquerytestdefault/datasets/siddag_summer2024/tables/raahi_summer2024table1"
-	SchemaDescriptor := &descriptorpb.DescriptorProto{
-		Name: proto.String("root"),
-		Field: []*descriptorpb.FieldDescriptorProto{
-			{Name: proto.String("Time"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-			{Name: proto.String("Text"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-		},
-	}
-
-	var currChecks OptionChecks
-	patch4 := monkey.PatchInstanceMethod(reflect.TypeOf(&managedwriter.Client{}), "NewManagedStream", func(m *managedwriter.Client, ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
-		log.Println("Mock NewManagedStream called")
-		for _, opt := range opts {
-
-			if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithType(managedwriter.DefaultStream)).Pointer() {
-				currChecks.correctStreamType = true
-			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithDestinationTable(currTableReference)).Pointer() {
-				currChecks.correctTableReference = true
-			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithSchemaDescriptor(SchemaDescriptor)).Pointer() {
-				currChecks.correctDescriptor = true
-			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.EnableWriteRetries(true)).Pointer() {
-				currChecks.correctEnableWriteRetries = true
-			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithMaxInflightBytes(52428800)).Pointer() {
-				currChecks.correctMaxInflightBytes = true
-			} else if reflect.ValueOf(opt).Pointer() == reflect.ValueOf(managedwriter.WithMaxInflightRequests(100)).Pointer() {
-				currChecks.correctMaxInflightRequests = true
-			}
-		}
-		return &managedwriter.ManagedStream{}, nil
-	})
-
-	defer patch4.Unpatch()
 
 	plugin := unsafe.Pointer(nil)
 	result := FLBPluginInit(plugin)
@@ -160,5 +149,4 @@ func TestFLBPluginInit(t *testing.T) {
 	assert.True(t, currChecks.correctMaxInflightRequests)
 	assert.True(t, currChecks.correctStreamType)
 	assert.True(t, currChecks.correctTableReference)
-
 }

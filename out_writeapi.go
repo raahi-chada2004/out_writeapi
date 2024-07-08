@@ -12,6 +12,7 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -26,7 +27,7 @@ import (
 type StreamConfig struct {
 	md            protoreflect.MessageDescriptor
 	managedStream *managedwriter.ManagedStream
-	client        *managedwriter.Client
+	client        ManagedWriterClient
 	maxChunkSize  int
 	results       *[]*managedwriter.AppendResult
 }
@@ -42,7 +43,7 @@ var (
 // projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
 // NewManagedStream as shown in line 54 and 63 of source.go).
 
-func getDescriptors(curr_ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -158,6 +159,36 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	return 0
 }
 
+type ManagedWriterClient interface {
+	NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
+	GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+	Close() error
+}
+
+type realManagedWriterClient struct {
+	currClient *managedwriter.Client
+}
+
+func (r *realManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+	return r.currClient.NewManagedStream(ctx, opts...)
+}
+
+func (r *realManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return r.currClient.GetWriteStream(ctx, req, opts...)
+}
+
+func (r *realManagedWriterClient) Close() error {
+	return r.currClient.Close()
+}
+
+var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+	client, err := managedwriter.NewClient(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &realManagedWriterClient{currClient: client}, nil
+}
+
 //export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
 	return output.FLBPluginRegister(def, "writeapi", "Sends data to BigQuery through WriteAPI")
@@ -213,7 +244,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	//create new client
-	client, err := managedwriter.NewClient(ms_ctx, projectID)
+	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
 		log.Fatal(err)
 		return output.FLB_ERROR
@@ -278,7 +309,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		log.Printf("Skipping flush because config is not found for tag: %d.", id)
 		return output.FLB_OK
 	}
 
@@ -362,7 +393,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %s.", id)
+		log.Printf("Skipping flush because config is not found for tag: %d.", id)
 		return output.FLB_OK
 	}
 
