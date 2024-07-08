@@ -9,6 +9,30 @@ Fluentbit does not create the dataset and table for your data, so you must creat
 - [Creating and using tables](https://cloud.google.com/bigquery/docs/tables)
 For this output plugin, the fields in the table and JSON file must match the target table exactly.
 
+## Installing Fluentbit
+First, install the necessary build tools:
+```
+sudo apt-get update
+sudo apt-get install git
+sudo apt-get install make
+sudo apt-get install gcc
+sudo apt-get install cmake
+sudo apt-get install build-essential
+sudo apt-get install flex
+sudo apt-get install bison
+sudo apt install libyaml-dev
+sudo apt install libssl-dev
+sudo apt install pkg-config
+```
+
+Clone the git repository with `git clone  https://github.com/fluent/fluent-bit.git` and then build the repo:
+```
+cd build
+cmake ../
+make
+sudo make install
+```
+
 ## Configuration File and Parameters
 The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file (named something like `examplefile.config`). The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
 ```
