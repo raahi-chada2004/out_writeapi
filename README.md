@@ -1,6 +1,7 @@
 # Fluentbit WriteAPI Output Plugin
 
-This README inclues all the necessary information to use the WriteAPI Pipeline. 
+This README includes all the necessary information to use the WriteAPI output pluging. This plugin allows you to stream records into Google Cloud BigQuery. This implementation only supports the following:
+- JSON file formats
 
 ## Configuration File
 
