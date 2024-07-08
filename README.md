@@ -5,8 +5,8 @@ This README includes all the necessary information to use the WriteAPI output pl
 
 ## Creating a BigQuery Dataset and Table
 Fluentbit does not create the dataset and table for your data, so you must create these ahead of time. 
-- [Creating and using datasets]https://cloud.google.com/bigquery/docs/datasets
-- [Creating and using tables]https://cloud.google.com/bigquery/docs/tables
+- [Creating and using datasets](https://cloud.google.com/bigquery/docs/datasets)
+- [Creating and using tables](https://cloud.google.com/bigquery/docs/tables)
 For this output plugin, the fields in the table and JSON file must match the target table exactly.
 
 ## Configuration File and Parameters
@@ -46,4 +46,4 @@ Here is an example of an `OUTPUT` section:
 ```
 This establishes an output with the name `writeapi` which matches any input with a tag of `logfile*`. The match uses regex, so the input from above would lead to this output. The next three lines describe the destination table in BigQuery. The format relates to how the file should be parsed and the three lines after relate to how you want the stream to send data.
 
-For more information, look to [Fluentbit Official Guide to a Config File]https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file
+For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
