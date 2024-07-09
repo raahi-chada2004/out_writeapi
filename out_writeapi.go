@@ -280,7 +280,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Fatal("Error in finding configuration")
+		log.Fatalf("Error in finding configuration: Skipping Flush for id %d", id)
 		return output.FLB_ERROR
 	}
 
@@ -363,7 +363,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Fatal("Error in finding configuration")
+		log.Fatalf("Error in finding configuration: Skipping Exit for id %d", id)
 		return output.FLB_ERROR
 	}
 
