@@ -34,6 +34,7 @@ sudo make install
 ```
 
 ## Setting Up the Plugin
+Clone this repository into it's own directory. The binary file should be up to date, but you can make it again by running `go build -buildmode=c-shared -o out_writeapi.so out_writeapi.go`. This command generates a header file (`out_writeapi.h`) and the binary file (`out_writeapi.so`).
 
 ## Configuration File and Parameters
 The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file (named something like `examplefile.config`). The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
@@ -45,7 +46,7 @@ The WriteAPI Output Plugin enables a customer to send data to Google BigQuery wi
     Parsers_File    path/to/jsonparser.conf
     plugins_file    path/to/plugins.conf
 ```
-The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. 
+The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute paths to the files.
 
 Here is an example of a `INPUT` section:
 ```
@@ -55,7 +56,7 @@ Here is an example of a `INPUT` section:
     Parser  json
     Tag     logfile1
 ```
-This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. 
+This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute path to the file. 
 
 Here is an example of an `OUTPUT` section:
 ```
