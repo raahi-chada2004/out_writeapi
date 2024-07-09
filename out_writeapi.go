@@ -24,20 +24,20 @@ import (
 )
 
 // Struct for each stream - one stream per output
-type StreamConfig struct {
-	md            protoreflect.MessageDescriptor
-	managedStream *managedwriter.ManagedStream
-	client        *managedwriter.Client
-	maxChunkSize  int
-	results       *[]*managedwriter.AppendResult
-	mu            sync.Mutex
+type outputConfig struct {
+	messageDescriptor protoreflect.MessageDescriptor
+	managedStream     *managedwriter.ManagedStream
+	client            *managedwriter.Client
+	maxChunkSize      int
+	appendResults     *[]*managedwriter.AppendResult
+	mutex             sync.Mutex
 }
 
 var (
 	err       error
 	ms_ctx    = context.Background()
-	configMap = make(map[int]*StreamConfig)
-	counter   = 0
+	configMap = make(map[int]*outputConfig)
+	configID  = 0
 )
 
 // This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
@@ -247,21 +247,21 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	var res_temp []*managedwriter.AppendResult
 
 	// Instantiates stream
-	config := StreamConfig{
-		md:            md,
-		managedStream: managedStream,
-		client:        client,
-		maxChunkSize:  maxChunkSize_init,
-		results:       &res_temp,
+	config := outputConfig{
+		messageDescriptor: md,
+		managedStream:     managedStream,
+		client:            client,
+		maxChunkSize:      maxChunkSize_init,
+		appendResults:     &res_temp,
 	}
 
-	configMap[counter] = &config
+	configMap[configID] = &config
 
 	// Creating FLB context for each output, enables multiinstancing
-	config.mu.Lock()
-	output.FLBPluginSetContext(plugin, counter)
-	counter = counter + 1
-	config.mu.Unlock()
+	config.mutex.Lock()
+	output.FLBPluginSetContext(plugin, configID)
+	configID = configID + 1
+	config.mutex.Unlock()
 
 	return output.FLB_OK
 }
@@ -286,7 +286,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_OK
 	}
 
-	responseErr := checkResponses(ms_ctx, config.results, false)
+	responseErr := checkResponses(ms_ctx, config.appendResults, false)
 	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
@@ -309,7 +309,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		//serialize data
 
 		//transform each row of data into binary using the json_to_binary function and the message descriptor from the getDescriptors function
-		buf, err := json_to_binary(config.md, row)
+		buf, err := json_to_binary(config.messageDescriptor, row)
 		if err != nil {
 			log.Fatal("converting from json to binary failed: ", err)
 			return output.FLB_ERROR
@@ -322,9 +322,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				log.Fatal("AppendRows: ", err)
 				return output.FLB_ERROR
 			}
-			*config.results = append(*config.results, stream)
+			*config.appendResults = append(*config.appendResults, stream)
 
-			// log.Printf("len in loop: %d", len(config.results))
+			// log.Printf("len in loop: %d", len(config.appendResults))
 			// log.Println("Done")
 
 			binaryData = nil
@@ -343,7 +343,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
-		*config.results = append(*config.results, stream)
+		*config.appendResults = append(*config.appendResults, stream)
 
 		log.Println("Done")
 	}
@@ -370,7 +370,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.results, true)
+	responseErr := checkResponses(ms_ctx, config.appendResults, true)
 	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
