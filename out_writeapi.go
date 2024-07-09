@@ -359,12 +359,11 @@ func FLBPluginExit() int {
 func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Get context
 	id := output.FLBPluginGetContext(ctx).(int)
-	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
+		log.Fatal("Error in finding configuration")
 		return output.FLB_ERROR
 	}
 
