@@ -276,14 +276,12 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
 	// Get Fluentbit Context
 	id := output.FLBPluginGetContext(ctx).(int)
-	log.Printf("[multiinstance] Flush called for id: %d", id)
-
 	// Locate stream in map
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
-		return output.FLB_OK
+		log.Fatalf("Error in finding configuration: Skipping Flush for id %d", id)
+		return output.FLB_ERROR
 	}
 
 	responseErr := checkResponses(ms_ctx, config.appendResults, false)
@@ -361,12 +359,11 @@ func FLBPluginExit() int {
 func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Get context
 	id := output.FLBPluginGetContext(ctx).(int)
-	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
+		log.Fatalf("Error in finding configuration: Skipping Exit for id %d", id)
 		return output.FLB_ERROR
 	}
 
