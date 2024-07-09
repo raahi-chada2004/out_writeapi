@@ -280,7 +280,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
+		log.Fatal("Error in finding configuration")
 		return output.FLB_ERROR
 	}
 
