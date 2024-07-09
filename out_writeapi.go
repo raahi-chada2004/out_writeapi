@@ -130,12 +130,14 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) int {
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := queueHead.GetResult(curr_ctx)
+			(*currMutex).Lock()
 			*currQueuePointer = (*currQueuePointer)[1:]
+			(*currMutex).Unlock()
 			if err != nil {
 				log.Fatal("error in checking responses")
 				return 1
@@ -145,7 +147,9 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			select {
 			case <-queueHead.Ready():
 				recvOffset, err := queueHead.GetResult(curr_ctx)
+				(*currMutex).Lock()
 				*currQueuePointer = (*currQueuePointer)[1:]
+				(*currMutex).Unlock()
 				if err != nil {
 					log.Fatal("error in checking responses")
 					return 1
@@ -286,7 +290,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_OK
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, false)
+	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
 	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
@@ -307,7 +311,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		row := parseMap(record)
 
 		//serialize data
-
 		//transform each row of data into binary using the json_to_binary function and the message descriptor from the getDescriptors function
 		buf, err := json_to_binary(config.messageDescriptor, row)
 		if err != nil {
@@ -322,10 +325,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				log.Fatal("AppendRows: ", err)
 				return output.FLB_ERROR
 			}
+			config.mutex.Lock()
 			*config.appendResults = append(*config.appendResults, stream)
-
-			// log.Printf("len in loop: %d", len(config.appendResults))
-			// log.Println("Done")
+			config.mutex.Unlock()
 
 			binaryData = nil
 			currsize = 0
@@ -343,7 +345,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
+		config.mutex.Lock()
 		*config.appendResults = append(*config.appendResults, stream)
+		config.mutex.Unlock()
 
 		log.Println("Done")
 	}
@@ -370,7 +374,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, true)
+	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex)
 	if responseErr == 1 {
 		log.Fatal("error in checking responses noticed in flush")
 		return output.FLB_ERROR
