@@ -59,13 +59,18 @@ func TestFLBPluginRegister(t *testing.T) {
 
 // this is a struct keeping track of whether the correct options are sent in NewManagedStream
 type OptionChecks struct {
-	*managedwriter.ManagedStream
-	correctStreamType          bool
-	correctTableReference      bool
-	correctDescriptor          bool
-	correctEnableWriteRetries  bool
-	correctMaxInflightBytes    bool
-	correctMaxInflightRequests bool
+	configProjectID        bool
+	configDatasetID        bool
+	configTableID          bool
+	configMaxChunkSize     bool
+	configMaxQueueSize     bool
+	configMaxQueueRequests bool
+	calledGetClient        bool
+	calledNewManagedStream bool
+	calledGetWriteStream   bool
+	calledSetContext       bool
+	numInputs              bool
+	mapSizeIncremented     bool
 }
 
 type MockManagedWriterClient struct {
@@ -89,23 +94,25 @@ func (m *MockManagedWriterClient) Close() error {
 
 // TestFLBPluginInit tests the FLBPluginInit function
 func TestFLBPluginInit(t *testing.T) {
-	// currTableReference := "projects/bigquerytestdefault/datasets/siddag_summer2024/tables/raahi_summer2024table1"
-	// SchemaDescriptor := &descriptorpb.DescriptorProto{
-	// 	Name: proto.String("root"),
-	// 	Field: []*descriptorpb.FieldDescriptorProto{
-	// 		{Name: proto.String("Time"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-	// 		{Name: proto.String("Text"), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-	// 	},
-	// }
+	count := 0
 	var currChecks OptionChecks
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
-			log.Println("Mock NewManagedStreamFunc called")
+			count = count + 1
+			if count == 3 {
+				currChecks.calledNewManagedStream = true
+			}
+			if len(opts) == 6 {
+				currChecks.numInputs = true
+			}
 			return nil, nil
 
 		},
 		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
-			log.Println("Mock GetWriteStream called")
+			count = count + 1
+			if count == 2 {
+				currChecks.calledGetWriteStream = true
+			}
 			return &storagepb.WriteStream{
 				Name: "mockstream",
 				TableSchema: &storagepb.TableSchema{
@@ -120,7 +127,10 @@ func TestFLBPluginInit(t *testing.T) {
 
 	originalFunc := getClient
 	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
-		log.Println("Mock ManagedWriterClient called")
+		count = count + 1
+		if count == 1 {
+			currChecks.calledGetClient = true
+		}
 		return mockClient, nil
 	}
 	defer func() { getClient = originalFunc }()
@@ -129,16 +139,22 @@ func TestFLBPluginInit(t *testing.T) {
 		log.Println("Mock out.FLBPluginConfigKey called")
 		switch key {
 		case "ProjectID":
+			currChecks.configProjectID = true
 			return "bigquerytestdefault"
 		case "DatasetID":
+			currChecks.configDatasetID = true
 			return "siddag_summer2024"
 		case "TableID":
+			currChecks.configTableID = true
 			return "raahi_summer2024table1"
 		case "Max_Chunk_Size":
+			currChecks.configMaxChunkSize = true
 			return "1048576"
 		case "Max_Queue_Requests":
+			currChecks.configMaxQueueRequests = true
 			return "100"
 		case "Max_Queue_Bytes":
+			currChecks.configMaxQueueSize = true
 			return "52428800"
 		default:
 			return ""
@@ -147,17 +163,29 @@ func TestFLBPluginInit(t *testing.T) {
 	defer patch1.Unpatch()
 
 	patch2 := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
-		log.Println("Mock out.FLBPluginSetContext called")
+		currChecks.calledSetContext = true
 	})
 	defer patch2.Unpatch()
 
 	plugin := unsafe.Pointer(nil)
+	initsize := len(configMap)
 	result := FLBPluginInit(plugin)
+	finsize := len(configMap)
+	if (finsize - 1) == initsize {
+		currChecks.mapSizeIncremented = true
+	}
 	assert.Equal(t, output.FLB_OK, result)
-	assert.True(t, currChecks.correctDescriptor)
-	assert.True(t, currChecks.correctEnableWriteRetries)
-	assert.True(t, currChecks.correctMaxInflightBytes)
-	assert.True(t, currChecks.correctMaxInflightRequests)
-	assert.True(t, currChecks.correctStreamType)
-	assert.True(t, currChecks.correctTableReference)
+	assert.True(t, currChecks.configProjectID)
+	assert.True(t, currChecks.configDatasetID)
+	assert.True(t, currChecks.configTableID)
+	assert.True(t, currChecks.configMaxChunkSize)
+	assert.True(t, currChecks.configMaxQueueRequests)
+	assert.True(t, currChecks.configMaxQueueSize)
+	assert.True(t, currChecks.calledGetClient)
+	assert.True(t, currChecks.calledGetWriteStream)
+	assert.True(t, currChecks.calledNewManagedStream)
+	assert.True(t, currChecks.calledSetContext)
+	assert.True(t, currChecks.numInputs)
+	assert.True(t, currChecks.mapSizeIncremented)
+
 }
