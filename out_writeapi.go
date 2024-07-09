@@ -365,7 +365,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Fatal("Error in finding configuration ", ok)
+		log.Fatal("Error in finding configuration")
 		return output.FLB_ERROR
 	}
 
