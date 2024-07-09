@@ -33,6 +33,8 @@ make
 sudo make install
 ```
 
+## Setting Up the Plugin
+
 ## Configuration File and Parameters
 The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file (named something like `examplefile.config`). The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
 ```
