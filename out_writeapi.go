@@ -1,3 +1,16 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package main
 
 import (
@@ -6,9 +19,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"unsafe"
-
+	"strconv"
 	"sync"
+	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"cloud.google.com/go/bigquery/storage/managedwriter"
@@ -20,9 +33,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
-)
-import (
-	"strconv"
 )
 
 // Struct for each stream - one stream per output
@@ -42,11 +52,10 @@ var (
 	counter   = 0
 )
 
-// This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
-// projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
-// NewManagedStream as shown in line 54 and 63 of source.go).
+// This function handles getting data on the schema of the table data is being written to.
+// getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
 
-func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -57,7 +66,7 @@ func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWrite
 	}
 
 	//call getwritestream to get data on the table
-	table_data, err2 := managed_writer_client.GetWriteStream(curr_ctx, &req)
+	table_data, err2 := mw_client.GetWriteStream(curr_ctx, &req)
 	if err2 != nil {
 		log.Fatalf("getWriteStream command failed: %v", err2)
 	}
@@ -83,11 +92,9 @@ func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWrite
 	return messageDescriptor, dp
 }
 
-// This function handles the data transformation from JSON to binary for a single json row. In practice, this function would be utilized within a loop to transform all of the json data. The inputs are the message descriptor
-//(which was returned in getDescriptors) as well as the relevant jsonRow (of type map[string]interface{} - which is the output of unmarshalling the json data). The outputs are the corresponding binary data as well as any error that occurs.
-//Various json, protojson, and proto marshalling/unmarshalling functions are utilized to transform the data. The message descriptor is used when creating an empty new proto message (which the data is placed into).
-
-func json_to_binary(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
+// This function handles the data transformation from JSON to binary for a single json row.
+// The outputs of this function are the corresponding binary data as well as any error that occurs.
+func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
 	//JSON map -> JSON byte
 	row, err := json.Marshal(jsonRow)
 	if err != nil {
@@ -112,7 +119,7 @@ func json_to_binary(message_descriptor protoreflect.MessageDescriptor, jsonRow m
 }
 
 // from https://github.com/majst01/fluent-bit-go-redis-output.git
-// function is used to transform pluent-bit record to a JSON map
+// function is used to transform fluent-bit record to a JSON map
 func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	m := make(map[string]interface{})
 	for k, v := range mapInterface {
@@ -132,15 +139,15 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) (int, error) {
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := queueHead.GetResult(curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				log.Fatal("error in checking responses")
-				return 1
+				log.Printf("Append response error: %s", err)
+				return 1, err
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
@@ -149,17 +156,32 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				recvOffset, err := queueHead.GetResult(curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
-					log.Fatal("error in checking responses")
-					return 1
+					log.Printf("Append response error: %s", err)
+					return 1, err
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
-				return 0
+				return 0, nil
 			}
 		}
 
 	}
-	return 0
+	return 0, nil
+}
+
+func getConfigField(plugin unsafe.Pointer, key string, errmsg string, defaultval int) int {
+	currstr := output.FLBPluginConfigKey(plugin, key)
+	var finval int
+	if currstr == "" {
+		finval = defaultval
+	} else {
+		finval, err = strconv.Atoi(currstr)
+		if err != nil {
+			log.Printf("%s: %s", errmsg, err)
+			finval = defaultval
+		}
+	}
+	return finval
 }
 
 type ManagedWriterClient interface {
@@ -197,9 +219,6 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 	return output.FLBPluginRegister(def, "writeapi", "Sends data to BigQuery through WriteAPI")
 }
 
-// (fluentbit will call this)
-// plugin (context) pointer to fluentbit context (state/ c code)
-//
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
 	//set projectID, datasetID, and tableID from config file params
@@ -208,48 +227,20 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
 	//optional maxchunksize param
-	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
-	var maxChunkSize_init int
-	if str != "" {
-		maxChunkSize_init, err = strconv.Atoi(str)
-		if err != nil {
-			log.Printf("Invalid Max Chunk Size, defaulting to 9 MB:%v", err)
-			maxChunkSize_init = 9 * 1024 * 1024
-		}
-		if maxChunkSize_init > 9*1024*1024 {
-			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize_init = 9 * 1024 * 1024
-		}
+	maxChunkSize_init := getConfigField(plugin, "Max_Chunk_Size", "Invalid Max Chunk Size, defaulting to 9 MB", (9 * 1024 * 1024))
+	if maxChunkSize_init > 9*1024*1024 {
+		log.Println("A single call to AppendRows cannot exceed 9 MB.")
+		maxChunkSize_init = 9 * 1024 * 1024
 	}
 
 	//optional max queue size params
-	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
-	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
-	var queueSize int
-	var queueByteSize int
-	if str1 == "" {
-		queueSize = 1000
-	} else {
-		queueSize, err = strconv.Atoi(str1)
-		if err != nil {
-			log.Printf("Invalid Max Queue Requests, defaulting to 1000:%v", err)
-			queueSize = 1000
-		}
-	}
-	if str2 == "" {
-		queueByteSize = (100 * 1024 * 1024)
-	} else {
-		queueByteSize, err = strconv.Atoi(str2)
-		if err != nil {
-			log.Printf("Invalid Max Queue MB, defaulting to 100 MB:%v", err)
-			queueByteSize = (100 * 1024 * 1024)
-		}
-	}
+	queueSize := getConfigField(plugin, "Max_Queue_Requests", "Invalid Max Queue Requests, defaulting to 1000", 1000)
+	queueByteSize := getConfigField(plugin, "Max_Queue_Bytes", "Invalid Max Queue Bytes, defaulting to 100 MB", (100 * 1024 * 1024))
 
 	//create new client
 	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("getClient failed in FLBPlugininit: %s", err)
 		return output.FLB_ERROR
 	}
 
@@ -270,11 +261,9 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
-		log.Fatal("NewManagedStream: ", err)
+		log.Fatal("NewManagedStream failed in FLBPluginInit: ", err)
 		return output.FLB_ERROR
 	}
-
-	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 
 	var res_temp []*managedwriter.AppendResult
 
@@ -318,9 +307,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.results, false)
-	if responseErr == 1 {
-		log.Fatal("error in checking responses noticed in flush")
+	responseErr, currerr := checkResponses(ms_ctx, config.results, false)
+	if responseErr != 0 {
+		log.Fatalf("error in checking responses noticed in flush:%s", currerr)
 		return output.FLB_ERROR
 	}
 
@@ -336,48 +325,43 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			break
 		}
 
-		row := parseMap(record)
+		rowJsonMap := parseMap(record)
 
 		//serialize data
 
-		//transform each row of data into binary using the json_to_binary function and the message descriptor from the getDescriptors function
-		buf, err := json_to_binary(config.md, row)
+		//transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
+		buf, err := jsonToBinary(config.md, rowJsonMap)
 		if err != nil {
 			log.Fatal("converting from json to binary failed: ", err)
 			return output.FLB_ERROR
 		}
 
-		if ((currsize + len(buf)) > config.maxChunkSize) && len(binaryData) != 0 {
+		if ((currsize + len(buf)) >= config.maxChunkSize) && len(binaryData) != 0 {
 			// Appending Rows
-			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
+			asyncResult, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 			if err != nil {
 				log.Fatal("AppendRows: ", err)
 				return output.FLB_ERROR
 			}
-			*config.results = append(*config.results, stream)
-
-			// log.Printf("len in loop: %d", len(config.results))
-			// log.Println("Done")
+			*config.results = append(*config.results, asyncResult)
 
 			binaryData = nil
 			currsize = 0
 
 		}
 		binaryData = append(binaryData, buf)
-		currsize += len(buf)
+		currsize += (len(buf) + 2)
 
 	}
 
 	if len(binaryData) > 0 {
 		// Appending Rows
-		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
+		asyncResult, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
 			log.Fatal("AppendRows: ", err)
 			return output.FLB_ERROR
 		}
-		*config.results = append(*config.results, stream)
-
-		log.Println("Done")
+		*config.results = append(*config.results, asyncResult)
 	}
 
 	return output.FLB_OK
@@ -402,9 +386,9 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_OK
 	}
 
-	responseErr := checkResponses(ms_ctx, config.results, true)
-	if responseErr == 1 {
-		log.Fatal("error in checking responses noticed in flush")
+	responseErr, currerr := checkResponses(ms_ctx, config.results, true)
+	if responseErr != 0 {
+		log.Fatalf("error in checking responses noticed in exit:%s", currerr)
 		return output.FLB_ERROR
 	}
 
