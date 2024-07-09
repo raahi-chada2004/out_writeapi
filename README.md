@@ -46,7 +46,7 @@ The WriteAPI Output Plugin enables a customer to send data to Google BigQuery wi
     Parsers_File    path/to/jsonparser.conf
     plugins_file    path/to/plugins.conf
 ```
-The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute paths to the files.
+The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute or relative paths to the files.
 
 Here is an example of a `INPUT` section:
 ```
@@ -56,7 +56,7 @@ Here is an example of a `INPUT` section:
     Parser  json
     Tag     logfile1
 ```
-This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute path to the file. 
+This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute or relative path to the file. 
 
 Here is an example of an `OUTPUT` section:
 ```
