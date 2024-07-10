@@ -131,13 +131,13 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) int {
+	(*currMutex).Lock()
+	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
-		(*currMutex).Lock()
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := queueHead.GetResult(curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
-			(*currMutex).Unlock()
 			if err != nil {
 				log.Fatal("error in checking responses")
 				return 1
@@ -148,14 +148,12 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			case <-queueHead.Ready():
 				recvOffset, err := queueHead.GetResult(curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
-				(*currMutex).Unlock()
 				if err != nil {
 					log.Fatal("error in checking responses")
 					return 1
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
-				(*currMutex).Unlock()
 				return 0
 			}
 		}
