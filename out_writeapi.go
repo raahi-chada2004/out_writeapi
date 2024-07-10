@@ -132,10 +132,10 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // and wait for the next response from WriteAPI
 func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) int {
 	for len(*currQueuePointer) > 0 {
+		(*currMutex).Lock()
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := queueHead.GetResult(curr_ctx)
-			(*currMutex).Lock()
 			*currQueuePointer = (*currQueuePointer)[1:]
 			(*currMutex).Unlock()
 			if err != nil {
@@ -147,7 +147,6 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			select {
 			case <-queueHead.Ready():
 				recvOffset, err := queueHead.GetResult(curr_ctx)
-				(*currMutex).Lock()
 				*currQueuePointer = (*currQueuePointer)[1:]
 				(*currMutex).Unlock()
 				if err != nil {
@@ -156,6 +155,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
+				(*currMutex).Unlock()
 				return 0
 			}
 		}
@@ -320,12 +320,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 		if ((currsize + len(buf)) > config.maxChunkSize) && len(binaryData) != 0 {
 			// Appending Rows
+			config.mutex.Lock()
 			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 			if err != nil {
 				log.Fatal("AppendRows: ", err)
+				config.mutex.Unlock()
 				return output.FLB_ERROR
 			}
-			config.mutex.Lock()
 			*config.appendResults = append(*config.appendResults, stream)
 			config.mutex.Unlock()
 
@@ -340,12 +341,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	if len(binaryData) > 0 {
 		// Appending Rows
+		config.mutex.Lock()
 		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
 			log.Fatal("AppendRows: ", err)
+			config.mutex.Unlock()
 			return output.FLB_ERROR
 		}
-		config.mutex.Lock()
 		*config.appendResults = append(*config.appendResults, stream)
 		config.mutex.Unlock()
 
