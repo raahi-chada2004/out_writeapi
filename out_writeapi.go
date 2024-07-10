@@ -319,14 +319,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		if ((currsize + len(buf)) > config.maxChunkSize) && len(binaryData) != 0 {
 			// Appending Rows
 			config.mutex.Lock()
+			defer config.mutex.Unlock()
 			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 			if err != nil {
 				log.Fatal("AppendRows: ", err)
-				config.mutex.Unlock()
 				return output.FLB_ERROR
 			}
 			*config.appendResults = append(*config.appendResults, stream)
-			config.mutex.Unlock()
 
 			binaryData = nil
 			currsize = 0
@@ -340,14 +339,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	if len(binaryData) > 0 {
 		// Appending Rows
 		config.mutex.Lock()
+		defer config.mutex.Unlock()
 		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
 			log.Fatal("AppendRows: ", err)
-			config.mutex.Unlock()
 			return output.FLB_ERROR
 		}
 		*config.appendResults = append(*config.appendResults, stream)
-		config.mutex.Unlock()
 
 		log.Println("Done")
 	}
