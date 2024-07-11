@@ -9,6 +9,7 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // this is a mock struct describing the states of the plugin after being register
@@ -46,6 +47,8 @@ type StreamChecks struct {
 	calledcheckResponses bool
 	createDecoder        bool
 	gotRecord            bool
+	calledparseMap       bool
+	calledJTB            bool
 	appendRows           bool
 	appendQueue          bool
 }
@@ -69,7 +72,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	// how do we use init with the bottom code
 	plugin := unsafe.Pointer(nil)
 	ctx := unsafe.Pointer(nil)
-	// initRes := FLBPluginInit(plugin)
+	initRes := FLBPluginInit(plugin)
 
 	var checks StreamChecks
 
@@ -104,8 +107,17 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	})
 	defer patchRecord.Unpatch()
 
-	// insert parseMap patch
-	// insert json_to_binary patch
+	patchParse := monkey.Patch(parseMap, func(mapInterface map[interface{}]interface{}) map[string]interface{} {
+		checks.calledparseMap = true
+		return nil
+	})
+	defer patchParse.Unpatch()
+
+	patchJTB := monkey.Patch(json_to_binary, func(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
+		checks.calledJTB = true
+		return nil, nil
+	})
+	defer patchJTB.Unpatch()
 
 	config := configMap[0]
 	config.managedStream = mockMS
@@ -119,6 +131,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		checks.appendQueue = true
 	}
 
+	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
 	assert.True(t, checks.appendRows)
 	assert.True(t, checks.calledcheckResponses)
