@@ -163,9 +163,9 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 }
 
 func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) int {
+	(*config).mutex.Lock()
+	defer (*config).mutex.Unlock()
 	if len(data) > 0 {
-		(*config).mutex.Lock()
-		defer (*config).mutex.Unlock()
 		stream, err := (*config).managedStream.AppendRows(ctx, data)
 		if err != nil {
 			log.Fatal("Stream failed at AppendRows: ", err)
