@@ -6,8 +6,10 @@ import (
 	"unsafe"
 
 	"bou.ke/monkey"
+	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"github.com/fluent/fluent-bit-go/output"
+	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -40,6 +42,25 @@ func TestFLBPluginRegister(t *testing.T) {
 	assert.Equal(t, 0, result)
 	assert.Equal(t, "writeapi", currplugin.name)
 
+}
+
+type MockManagedWriterClient struct {
+	client               *managedwriter.Client
+	NewManagedStreamFunc func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
+	GetWriteStreamFunc   func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+	CloseFunc            func() error
+}
+
+func (m *MockManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+	return m.NewManagedStreamFunc(ctx, opts...)
+}
+
+func (m *MockManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return m.GetWriteStreamFunc(ctx, req, opts...)
+}
+
+func (m *MockManagedWriterClient) Close() error {
+	return m.client.Close()
 }
 
 type StreamChecks struct {
