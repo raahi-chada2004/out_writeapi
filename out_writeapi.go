@@ -27,7 +27,7 @@ import (
 // Struct for each stream - one stream per output
 type outputConfig struct {
 	messageDescriptor protoreflect.MessageDescriptor
-	managedStream     *managedwriter.ManagedStream
+	managedStream     MWManagedStream
 	client            ManagedWriterClient
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
@@ -183,12 +183,33 @@ func (r *realManagedWriterClient) Close() error {
 	return r.currClient.Close()
 }
 
+type MWManagedStream interface {
+	AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
+	Close() error
+}
+
+type realManagedStream struct {
+	currStream *managedwriter.ManagedStream
+}
+
+func (rms *realManagedStream) AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
+	return rms.currStream.AppendRows(ctx, data, opts...)
+}
+
+func (rms *realManagedStream) Close() error {
+	return rms.currStream.Close()
+}
+
 var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
 	client, err := managedwriter.NewClient(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
 	return &realManagedWriterClient{currClient: client}, nil
+}
+
+var returnManagedStream = func(managedStream *managedwriter.ManagedStream) (MWManagedStream, error) {
+	return &realManagedStream{currStream: managedStream}, nil
 }
 
 //export FLBPluginRegister
@@ -273,6 +294,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
+	msTemp, err := returnManagedStream(managedStream)
+
 	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 
 	var res_temp []*managedwriter.AppendResult
@@ -280,7 +303,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	// Instantiates stream
 	config := outputConfig{
 		messageDescriptor: md,
-		managedStream:     managedStream,
+		managedStream:     msTemp,
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
