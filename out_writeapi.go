@@ -162,18 +162,18 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	return 0
 }
 
-func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) int {
+func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
 	if len(data) > 0 {
-		stream, err := (*config).managedStream.AppendRows(ctx, data)
+		appendResult, err := (*config).managedStream.AppendRows(ctx, data)
 		if err != nil {
 			log.Fatal("Stream failed at AppendRows: ", err)
-			return 1
+			return err
 		}
-		*(*config).appendResults = append(*(*config).appendResults, stream)
+		*(*config).appendResults = append(*(*config).appendResults, appendResult)
 	}
-	return 0
+	return nil
 }
 
 //export FLBPluginRegister
@@ -332,8 +332,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 		if (currsize + len(buf)) > config.maxChunkSize {
 			// Appending Rows
-			res := sendRequest(ms_ctx, binaryData, &config)
-			if res != 0 {
+			err := sendRequest(ms_ctx, binaryData, &config)
+			if err != nil {
 				return output.FLB_ERROR
 			}
 
@@ -346,8 +346,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	}
 	// Appending Rows
-	res := sendRequest(ms_ctx, binaryData, &config)
-	if res != 0 {
+	err := sendRequest(ms_ctx, binaryData, &config)
+	if err != nil {
 		return output.FLB_ERROR
 	}
 
