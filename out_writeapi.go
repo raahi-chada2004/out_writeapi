@@ -205,6 +205,11 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 	return nil
 }
 
+// this is a test-only method that provides the instance count for configMap
+func getInstanceCount() int {
+	return len(configMap)
+}
+
 // this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
 // with its actual methods.
 type ManagedWriterClient interface {

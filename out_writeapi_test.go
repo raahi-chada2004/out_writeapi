@@ -168,9 +168,9 @@ func TestFLBPluginInit(t *testing.T) {
 	defer patch2.Unpatch()
 
 	plugin := unsafe.Pointer(nil)
-	initsize := len(configMap)
+	initsize := getInstanceCount()
 	result := FLBPluginInit(plugin)
-	finsize := len(configMap)
+	finsize := getInstanceCount()
 	if (finsize - 1) == initsize {
 		currChecks.mapSizeIncremented = true
 	}
