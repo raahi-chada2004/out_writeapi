@@ -104,16 +104,10 @@ func (m *MockManagedWriterClient) CreateWriteStream(ctx context.Context, req *st
 
 // TestFLBPluginInit tests the FLBPluginInit function
 func TestFLBPluginInit(t *testing.T) {
-	//variable keeping track of what order functions are called in
-	order := 0
 	var currChecks OptionChecks
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
-			order++
-			//checking to see if function was called third
-			if order == 3 {
-				currChecks.calledNewManagedStream++
-			}
+			currChecks.calledNewManagedStream++
 			if len(opts) == 6 {
 				currChecks.numInputs = true
 			}
@@ -121,11 +115,7 @@ func TestFLBPluginInit(t *testing.T) {
 
 		},
 		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
-			order++
-			//checking to see if function was called second
-			if order == 2 {
-				currChecks.calledGetWriteStream++
-			}
+			currChecks.calledGetWriteStream++
 			return &storagepb.WriteStream{
 				Name: "mockstream",
 				TableSchema: &storagepb.TableSchema{
@@ -140,11 +130,7 @@ func TestFLBPluginInit(t *testing.T) {
 
 	originalFunc := getClient
 	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
-		order++
-		//checking to see if function was called first
-		if order == 1 {
-			currChecks.calledGetClient++
-		}
+		currChecks.calledGetClient++
 		return mockClient, nil
 	}
 	defer func() { getClient = originalFunc }()
