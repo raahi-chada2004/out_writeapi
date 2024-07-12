@@ -13,7 +13,8 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
-	"github.com/googleapis/gax-go/v2"
+
+	//"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -30,7 +31,7 @@ import (
 type outputConfig struct {
 	messageDescriptor protoreflect.MessageDescriptor
 	managedStream     MWManagedStream
-	client            ManagedWriterClient
+	client            *managedwriter.Client
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
 	mutex             sync.Mutex
@@ -47,7 +48,7 @@ var (
 // projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
 // NewManagedStream as shown in line 54 and 63 of source.go).
 
-func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -163,47 +164,18 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	return 0
 }
 
-type ManagedWriterClient interface {
-	NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
-	GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
-	Close() error
-}
-
-type realManagedWriterClient struct {
-	currClient *managedwriter.Client
-}
-
-func (r *realManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
-	return r.currClient.NewManagedStream(ctx, opts...)
-}
-
-func (r *realManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
-	return r.currClient.GetWriteStream(ctx, req, opts...)
-}
-
-func (r *realManagedWriterClient) Close() error {
-	return r.currClient.Close()
-}
-
 type MWManagedStream interface {
 	AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
 	Close() error
 }
 
-var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
-	client, err := managedwriter.NewClient(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	return &realManagedWriterClient{currClient: client}, nil
+// To inject a mock interface, I override getWriter and getContext
+var getWriter = func(client *managedwriter.Client, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+	return client.NewManagedStream(ctx, opts...)
 }
 
-var getWriter = func(ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
-	client, err := getClient(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	return client.NewManagedStream(ctx, opts...)
+var getContext = func(ctx unsafe.Pointer) int {
+	return output.FLBPluginGetContext(ctx).(int)
 }
 
 //export FLBPluginRegister
@@ -261,7 +233,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	//create new client
-	client, err := getClient(ms_ctx, projectID)
+	client, err := managedwriter.NewClient(ms_ctx, projectID)
 	if err != nil {
 		log.Fatal(err)
 		return output.FLB_ERROR
@@ -274,7 +246,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
 	// Create stream using NewManagedStream
-	managedStream, err := getWriter(ms_ctx, projectID,
+	managedStream, err := getWriter(client, ms_ctx, projectID,
 		managedwriter.WithType(managedwriter.DefaultStream),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
@@ -320,11 +292,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	log.Println("Hi!")
-	// Get Fluentbit Context
-	//id := output.FLBPluginGetContext(ctx).(int)
-	id := 0
-	log.Println("Hi!2")
+	id := getContext(ctx)
 	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
@@ -350,14 +318,10 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		// Extract Record
 		ret, _, record := output.GetRecord(dec)
 		if ret != 0 {
-			log.Printf("ret: %d", ret)
-			log.Println("Hi4")
 			break
 		}
 
 		row := parseMap(record)
-
-		log.Println("Hi3")
 
 		//serialize data
 
@@ -377,9 +341,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			}
 			*config.appendResults = append(*config.appendResults, stream)
 
-			// log.Printf("len in loop: %d", len(config.appendResults))
-			// log.Println("Done")
-
 			binaryData = nil
 			currsize = 0
 
@@ -390,7 +351,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 
 	if len(binaryData) > 0 {
-		log.Println("Hi!5")
 		// Appending Rows
 		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
@@ -398,7 +358,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			return output.FLB_ERROR
 		}
 		*config.appendResults = append(*config.appendResults, stream)
-		log.Println(len(*config.appendResults))
 
 		log.Println("Done")
 	}
