@@ -52,6 +52,12 @@ var (
 	configID  = 0
 )
 
+const (
+	chunkSizeLimit      = 9 * 1024 * 1024
+	queueRequestDefault = 1000
+	queueByteDefault    = 100 * 1024 * 1024
+)
+
 // This function handles getting data on the schema of the table data is being written to.
 // getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
 func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
@@ -261,19 +267,16 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	if err != nil {
 		return output.FLB_ERROR
 	}
-	const chunkSizeLimit = 9 * 1024 * 1024
 	if maxChunkSize_init > chunkSizeLimit {
 		log.Printf("Max_Chunk_Size was set to: %d, but a single call to AppendRows cannot exceed 9 MB. Defaulting to 9 MB", maxChunkSize_init)
 		maxChunkSize_init = chunkSizeLimit
 	}
 
 	//optional max queue size params
-	const queueRequestDefault = 1000
 	queueSize, err := getConfigField(plugin, "Max_Queue_Requests", "Invalid Max Queue Requests, defaulting to 1000", queueRequestDefault)
 	if err != nil {
 		return output.FLB_ERROR
 	}
-	const queueByteDefault = 100 * 1024 * 1024
 	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", "Invalid Max Queue Bytes, defaulting to 100 MB", queueByteDefault)
 	if err != nil {
 		return output.FLB_ERROR
