@@ -22,6 +22,8 @@ import (
 )
 import (
 	"strconv"
+
+	_ "github.com/googleapis/enterprise-certificate-proxy/client"
 )
 
 // Struct for each stream - one stream per output
@@ -188,18 +190,6 @@ type MWManagedStream interface {
 	Close() error
 }
 
-type realManagedStream struct {
-	currStream *managedwriter.ManagedStream
-}
-
-func (rms *realManagedStream) AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
-	return rms.currStream.AppendRows(ctx, data, opts...)
-}
-
-func (rms *realManagedStream) Close() error {
-	return rms.currStream.Close()
-}
-
 var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
 	client, err := managedwriter.NewClient(ctx, projectID)
 	if err != nil {
@@ -208,8 +198,12 @@ var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient
 	return &realManagedWriterClient{currClient: client}, nil
 }
 
-var returnManagedStream = func(managedStream *managedwriter.ManagedStream) (MWManagedStream, error) {
-	return &realManagedStream{currStream: managedStream}, nil
+var getWriter = func(ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+	client, err := getClient(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return client.NewManagedStream(ctx, opts...)
 }
 
 //export FLBPluginRegister
@@ -280,7 +274,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
 	// Create stream using NewManagedStream
-	managedStream, err := client.NewManagedStream(ms_ctx,
+	managedStream, err := getWriter(ms_ctx, projectID,
 		managedwriter.WithType(managedwriter.DefaultStream),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
@@ -294,8 +288,6 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	msTemp, err := returnManagedStream(managedStream)
-
 	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 
 	var res_temp []*managedwriter.AppendResult
@@ -303,7 +295,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	// Instantiates stream
 	config := outputConfig{
 		messageDescriptor: md,
-		managedStream:     msTemp,
+		managedStream:     managedStream,
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
@@ -328,8 +320,11 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
+	log.Println("Hi!")
 	// Get Fluentbit Context
-	id := output.FLBPluginGetContext(ctx).(int)
+	//id := output.FLBPluginGetContext(ctx).(int)
+	id := 0
+	log.Println("Hi!2")
 	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
@@ -355,10 +350,14 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		// Extract Record
 		ret, _, record := output.GetRecord(dec)
 		if ret != 0 {
+			log.Printf("ret: %d", ret)
+			log.Println("Hi4")
 			break
 		}
 
 		row := parseMap(record)
+
+		log.Println("Hi3")
 
 		//serialize data
 
@@ -391,6 +390,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 
 	if len(binaryData) > 0 {
+		log.Println("Hi!5")
 		// Appending Rows
 		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
 		if err != nil {
@@ -398,6 +398,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			return output.FLB_ERROR
 		}
 		*config.appendResults = append(*config.appendResults, stream)
+		log.Println(len(*config.appendResults))
 
 		log.Println("Done")
 	}

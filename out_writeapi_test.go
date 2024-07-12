@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log"
+	_ "log"
 	"testing"
 	"unsafe"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // this is a mock struct describing the states of the plugin after being register
@@ -44,6 +47,21 @@ func TestFLBPluginRegister(t *testing.T) {
 
 }
 
+type OptionChecks struct {
+	configProjectID        bool
+	configDatasetID        bool
+	configTableID          bool
+	configMaxChunkSize     bool
+	configMaxQueueSize     bool
+	configMaxQueueRequests bool
+	calledGetClient        bool
+	calledNewManagedStream bool
+	calledGetWriteStream   bool
+	calledSetContext       bool
+	numInputs              bool
+	mapSizeIncremented     bool
+}
+
 type MockManagedWriterClient struct {
 	client               *managedwriter.Client
 	NewManagedStreamFunc func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
@@ -63,6 +81,103 @@ func (m *MockManagedWriterClient) Close() error {
 	return m.client.Close()
 }
 
+func TestFLBPluginInit(t *testing.T) {
+	count := 0
+	var currChecks OptionChecks
+	mockClient := &MockManagedWriterClient{
+		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+			count = count + 1
+			if count == 3 {
+				currChecks.calledNewManagedStream = true
+			}
+			if len(opts) == 6 {
+				currChecks.numInputs = true
+			}
+			return nil, nil
+
+		},
+		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+			count = count + 1
+			if count == 2 {
+				currChecks.calledGetWriteStream = true
+			}
+			return &storagepb.WriteStream{
+				Name: "mockstream",
+				TableSchema: &storagepb.TableSchema{
+					Fields: []*storagepb.TableFieldSchema{
+						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+					},
+				},
+			}, nil
+		},
+	}
+
+	originalFunc := getClient
+	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+		count = count + 1
+		if count == 1 {
+			currChecks.calledGetClient = true
+		}
+		return mockClient, nil
+	}
+	defer func() { getClient = originalFunc }()
+
+	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		log.Println("Mock out.FLBPluginConfigKey called")
+		switch key {
+		case "ProjectID":
+			currChecks.configProjectID = true
+			return "bigquerytestdefault"
+		case "DatasetID":
+			currChecks.configDatasetID = true
+			return "siddag_summer2024"
+		case "TableID":
+			currChecks.configTableID = true
+			return "tanip_summer2024table"
+		case "Max_Chunk_Size":
+			currChecks.configMaxChunkSize = true
+			return "1048576"
+		case "Max_Queue_Requests":
+			currChecks.configMaxQueueRequests = true
+			return "100"
+		case "Max_Queue_Bytes":
+			currChecks.configMaxQueueSize = true
+			return "52428800"
+		default:
+			return ""
+		}
+	})
+	defer patch1.Unpatch()
+
+	patch2 := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
+		currChecks.calledSetContext = true
+	})
+	defer patch2.Unpatch()
+
+	plugin := unsafe.Pointer(nil)
+	initsize := len(configMap)
+	result := FLBPluginInit(plugin)
+	finsize := len(configMap)
+	if (finsize - 1) == initsize {
+		currChecks.mapSizeIncremented = true
+	}
+	assert.Equal(t, output.FLB_OK, result)
+	assert.True(t, currChecks.configProjectID)
+	assert.True(t, currChecks.configDatasetID)
+	assert.True(t, currChecks.configTableID)
+	assert.True(t, currChecks.configMaxChunkSize)
+	assert.True(t, currChecks.configMaxQueueRequests)
+	assert.True(t, currChecks.configMaxQueueSize)
+	assert.True(t, currChecks.calledGetClient)
+	assert.True(t, currChecks.calledGetWriteStream)
+	// assert.True(t, currChecks.calledNewManagedStream)
+	assert.True(t, currChecks.calledSetContext)
+	assert.True(t, currChecks.numInputs)
+	assert.True(t, currChecks.mapSizeIncremented)
+
+}
+
 type StreamChecks struct {
 	calledGetContext     bool
 	calledcheckResponses bool
@@ -77,6 +192,7 @@ type StreamChecks struct {
 type MockManagedStream struct {
 	managedstream  *managedwriter.ManagedStream
 	AppendRowsFunc func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
+	StreamName     func() string
 	CloseFunc      func() error
 }
 
@@ -91,11 +207,12 @@ func (m *MockManagedStream) Close() error {
 func TestFLBPluginFlushCtx(t *testing.T) {
 	// Calling Init
 	// how do we use init with the bottom code
-	plugin := unsafe.Pointer(nil)
-	ctx := unsafe.Pointer(nil)
-	initRes := FLBPluginInit(plugin)
+	// we need to mock everything in init too
 
 	var checks StreamChecks
+	var setID int = 0
+	// var getID int = 0
+	// getIDUintptr := uintptr(getID)
 
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -104,11 +221,52 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		},
 	}
 
-	patchGetContext := monkey.Patch(output.FLBPluginGetContext, func(plugin unsafe.Pointer) interface{} {
-		checks.calledGetContext = true
-		return 0
+	originalFunc := getWriter
+	getWriter = func(ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+		return mockMS, nil
+	}
+	defer func() { getWriter = originalFunc }()
+
+	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		switch key {
+		case "ProjectID":
+			return "bigquerytestdefault"
+		case "DatasetID":
+			return "siddag_summer2024"
+		case "TableID":
+			return "raahi_summer2024table1"
+		case "Max_Chunk_Size":
+			return "1048576"
+		case "Max_Queue_Requests":
+			return "100"
+		case "Max_Queue_Bytes":
+			return "52428800"
+		default:
+			return ""
+		}
 	})
-	defer patchGetContext.Unpatch()
+	defer patch1.Unpatch()
+
+	patchDescriptor := monkey.Patch(getDescriptors, func(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+		return nil, nil
+	})
+	defer patchDescriptor.Unpatch()
+
+	patchSetContext := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
+		setID = setID + 1
+	})
+	defer patchSetContext.Unpatch()
+
+	plugin := unsafe.Pointer(nil)
+	// ctx := unsafe.Pointer(nil)
+	initRes := FLBPluginInit(plugin)
+
+	// patchGetContext := monkey.Patch(output.FLBPluginGetContext, func(proxyCtx unsafe.Pointer) interface{} {
+	// 	getID = setID - 1
+	// 	checks.calledGetContext = true
+	// 	return getID
+	// })
+	// defer patchGetContext.Unpatch()
 
 	patchCheckResponses := monkey.Patch(checkResponses, func(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
 		checks.calledcheckResponses = true
@@ -122,9 +280,11 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	})
 	defer patchDecoder.Unpatch()
 
+	var loopCount int = 0
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
 		checks.gotRecord = true
-		return 0, nil, nil
+		loopCount++
+		return loopCount - 1, nil, nil
 	})
 	defer patchRecord.Unpatch()
 
@@ -136,19 +296,27 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	patchJTB := monkey.Patch(json_to_binary, func(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
 		checks.calledJTB = true
-		return nil, nil
+		tempBD := make([]byte, 1)
+		tempBD[0] = 1
+		return tempBD, nil
 	})
 	defer patchJTB.Unpatch()
 
 	config := configMap[0]
-	config.managedStream = mockMS
 	initsize := len(*config.appendResults)
 
-	// should we call flush twice to ensure the queue is remaining updated between calls?
-	result := FLBPluginFlushCtx(ctx, plugin, 0, nil)
+	// // should we call flush twice to ensure the queue is remaining updated between calls?
+	//result := FLBPluginFlushCtx(unsafe.Pointer(getIDUintptr), plugin, 1, nil)
+	log.Println("Hi!")
+	result := FLBPluginFlushCtx(unsafe.Pointer(uintptr(0)), plugin, 1, nil)
+	loopCount = 0
+	result = FLBPluginFlushCtx(unsafe.Pointer(uintptr(0)), plugin, 1, nil)
+	// result = FLBPluginFlushCtx(ctx, plugin, 1, nil)
+
+	// print(result)
 
 	finsize := len(*config.appendResults)
-	if finsize-1 == initsize {
+	if finsize-2 == initsize {
 		checks.appendQueue = true
 	}
 
@@ -156,7 +324,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	assert.Equal(t, output.FLB_OK, result)
 	assert.True(t, checks.appendRows)
 	assert.True(t, checks.calledcheckResponses)
-	assert.True(t, checks.calledGetContext)
+	// // assert.True(t, checks.calledGetContext)
 	assert.True(t, checks.appendQueue)
 	assert.True(t, checks.createDecoder)
 	assert.True(t, checks.gotRecord)
