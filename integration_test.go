@@ -16,36 +16,52 @@ import (
 	"google.golang.org/api/iterator"
 )
 
+const (
+	logFilePath    = "./logfile.log"
+	logFileName    = "logfile.log"
+	configFilePath = "./fluent-bit.conf"
+)
+
 // integration test validates the end-to-end fluentbit and bigquery pipeline
 func TestPipeline(t *testing.T) {
-	logFilePath := "./logfile.log"
-	configFilePath := "./fluent-bit.conf"
+
 	ctx := context.Background()
 
+	//get projectID from environment
+	projectID := os.Getenv("ProjectID")
+	if projectID == "" {
+		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
+	}
+
 	// Set up BigQuery client
-	client, err := bigquery.NewClient(ctx, "bigquerytestdefault")
+	client, err := bigquery.NewClient(ctx, projectID)
 	if err != nil {
 		t.Fatalf("Failed to create BigQuery client: %v", err)
 	}
 	defer client.Close()
 
-	// Create a random table name
-	hash := randString()
-	tableID := "test_" + hash
+	// Create a random dataset and table name
+	datasetHash := randString()
+	datasetID := "testdataset_" + datasetHash
 
-	// Create BigQuery table in an existing dataset and project
-	datasetID := "siddag_summer2024"
+	tableHash := randString()
+	tableID := "testtable_" + tableHash
+
+	// Create BigQuery dataset and table in an existing project
 	tableSchema := bigquery.Schema{
 		{Name: "Message", Type: bigquery.StringFieldType},
 	}
 	dataset := client.Dataset(datasetID)
+	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
+		t.Fatalf("Failed to create BigQuery dataset %v", err)
+	}
 	table := dataset.Table(tableID)
 	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
 		t.Fatalf("Failed to create BigQuery table: %v", err)
 	}
 
 	//Create config file with random table name
-	if err := createConfigFile(tableID); err != nil {
+	if err := createConfigFile(projectID, datasetID, tableID); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
 
@@ -75,7 +91,7 @@ func TestPipeline(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT Message FROM `bigquerytestdefault.siddag_summer2024." + tableID + "`"
+	queryMsg := "SELECT Message FROM `" + projectID + "." + datasetID + "." + tableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -138,26 +154,34 @@ const configTemplate = `
     plugins_file    ./plugins.conf
 [INPUT]
     Name                               tail
-    Path                               ./logfile.log
+    Path                               {{.CurrLogfilePath}}
     Parser                             json
     Tag                                hello_world
 [OUTPUT]
     Name                               writeapi
     Match                              hello_world
-    ProjectId                          bigquerytestdefault
-    DatasetId                          siddag_summer2024
+    ProjectId                          {{.CurrProjectName}}
+    DatasetId                          {{.CurrDatasetName}}
     TableId                            {{.CurrTableName}}
 `
 
 // struct for dynamically updating config file
 type Config struct {
-	CurrTableName string
+	CurrLogfilePath string
+	CurrProjectName string
+	CurrDatasetName string
+	CurrTableName   string
 }
 
 // function creates configuration file with the input as the TableId field
-func createConfigFile(currTableID string) error {
+func createConfigFile(currProjectID string, currDatasetID string, currTableID string) error {
 	//struct with the TableId
-	config := Config{CurrTableName: currTableID}
+	config := Config{
+		CurrLogfilePath: logFilePath,
+		CurrProjectName: currProjectID,
+		CurrDatasetName: currDatasetID,
+		CurrTableName:   currTableID,
+	}
 
 	//create a new template with the format of configTemplate
 	tmpl, err := template.New("currConfig").Parse(configTemplate)
@@ -185,7 +209,7 @@ type log_entry struct {
 // data generation function
 func generateData(numRows int) error {
 	//open file
-	file, err := os.OpenFile("logfile.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	logger := log.New(file, "", 0)
 	if err != nil {
 		return err
