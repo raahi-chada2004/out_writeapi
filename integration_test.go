@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	logFilePath    = "./logfile.log"
 	logFileName    = "logfile.log"
+	logFilePath    = "./" + logFileName
 	configFilePath = "./fluent-bit.conf"
+	numRowsData    = 10
 )
 
 // integration test validates the end-to-end fluentbit and bigquery pipeline
@@ -80,7 +81,7 @@ func TestPipeline(t *testing.T) {
 
 	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
-	if err := generateData(10); err != nil {
+	if err := generateData(numRowsData); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -115,10 +116,10 @@ func TestPipeline(t *testing.T) {
 	}
 
 	// Verify the number of rows
-	assert.Equal(t, 10, rowCount)
+	assert.Equal(t, numRowsData, rowCount)
 
-	// Clean up - delete the BigQuery table
-	if err := table.Delete(ctx); err != nil {
+	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
+	if err := dataset.DeleteWithContents(ctx); err != nil {
 		t.Fatalf("Failed to delete BigQuery table: %v", err)
 	}
 
