@@ -104,7 +104,7 @@ func (m *MockManagedWriterClient) CreateWriteStream(ctx context.Context, req *st
 }
 
 // TestFLBPluginInit tests the FLBPluginInit function
-func TestFLBPluginInitExactlyOnce(t *testing.T) {
+func TestFLBPluginInit(t *testing.T) {
 	var currChecks OptionChecks
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
@@ -195,7 +195,8 @@ func TestFLBPluginInitExactlyOnce(t *testing.T) {
 
 }
 
-func TestFLBPluginInit(t *testing.T) {
+// this test checks that all relevant functions are called in init when exactly once is set to true
+func TestFLBPluginInitExactlyOnce(t *testing.T) {
 	var currChecks OptionChecks
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
