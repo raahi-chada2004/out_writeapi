@@ -17,6 +17,7 @@ import (
 	"C"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -60,7 +61,7 @@ const (
 
 // This function handles getting data on the schema of the table data is being written to.
 // getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
-func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -71,30 +72,30 @@ func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, pro
 	}
 
 	//call getwritestream to get data on the table
-	table_data, err2 := mw_client.GetWriteStream(curr_ctx, &req)
-	if err2 != nil {
-		log.Fatalf("getWriteStream command failed: %v", err2)
+	table_data, err := mw_client.GetWriteStream(curr_ctx, &req)
+	if err != nil {
+		return nil, nil, err
 	}
 	//get the schema from table data
 	table_schema := table_data.GetTableSchema()
 	//storage schema ->proto descriptor
 	descriptor, err := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 	if err != nil {
-		log.Fatalf("adapt.StorageSchemaToDescriptor: %v", err)
+		return nil, nil, err
 	}
 	//proto descriptor -> messageDescriptor
 	messageDescriptor, ok := descriptor.(protoreflect.MessageDescriptor)
 	if !ok {
-		log.Fatalf("adapted descriptor is not a message descriptor")
+		return nil, nil, errors.New("Message descriptor could not be created from table's proto descriptor")
 	}
 
 	//messageDescriptor -> descriptor proto
 	dp, err := adapt.NormalizeDescriptor(messageDescriptor)
 	if err != nil {
-		log.Fatalf("NormalizeDescriptor: %v", err)
+		return nil, nil, err
 	}
 
-	return messageDescriptor, dp
+	return messageDescriptor, dp, nil
 }
 
 // This function handles the data transformation from JSON to binary for a single json row.
@@ -103,7 +104,7 @@ func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map
 	//JSON map -> JSON byte
 	row, err := json.Marshal(jsonRow)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal json map: %w", err)
+		return nil, err
 	}
 	//create empty message
 	message := dynamicpb.NewMessage(message_descriptor)
@@ -111,13 +112,13 @@ func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map
 	// First, json->proto message
 	err = protojson.Unmarshal(row, message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to Unmarshal json message: %w", err)
+		return nil, err
 	}
 
 	// Then, proto message -> bytes.
 	b, err := proto.Marshal(message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal proto bytes: %w ", err)
+		return nil, err
 	}
 
 	return b, nil
@@ -151,23 +152,19 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
-			recvOffset, err := queueHead.GetResult(curr_ctx)
+			_, err := queueHead.GetResult(curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				log.Printf("Append response error : %s", err)
 				return err
 			}
-			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
 			select {
 			case <-queueHead.Ready():
-				recvOffset, err := queueHead.GetResult(curr_ctx)
+				_, err := queueHead.GetResult(curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
-					log.Printf("Append response error : %s", err)
 					return err
 				}
-				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			default:
 				return nil
 			}
@@ -178,13 +175,12 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
-func getConfigField(plugin unsafe.Pointer, key string, errmsg string, defaultval int) (int, error) {
+func getConfigField(plugin unsafe.Pointer, key string, defaultval int) (int, error) {
 	currstr := output.FLBPluginConfigKey(plugin, key)
 	finval := defaultval
 	if currstr != "" {
 		finval, err = strconv.Atoi(currstr)
 		if err != nil {
-			log.Printf("%s: %s", errmsg, err)
 			return finval, err
 		}
 	}
@@ -197,7 +193,6 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 		defer (*config).mutex.Unlock()
 		appendResult, err := (*config).managedStream.AppendRows(ctx, data)
 		if err != nil {
-			log.Fatal("Stream failed at AppendRows: ", err)
 			return err
 		}
 		*(*config).appendResults = append(*(*config).appendResults, appendResult)
@@ -268,8 +263,9 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
 	//optional maxchunksize param
-	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", "Invalid Max Chunk Size, defaulting to 9 MB", (9 * 1024 * 1024))
+	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", chunkSizeLimit)
 	if err != nil {
+		log.Printf("Invalid Max_Chunk_Size parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
 	if maxChunkSize_init > chunkSizeLimit {
@@ -278,26 +274,32 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	//optional max queue size params
-	queueSize, err := getConfigField(plugin, "Max_Queue_Requests", "Invalid Max Queue Requests, defaulting to 1000", queueRequestDefault)
+	queueSize, err := getConfigField(plugin, "Max_Queue_Requests", queueRequestDefault)
 	if err != nil {
+		log.Printf("Invalid Max_Queue_Requests parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
-	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", "Invalid Max Queue Bytes, defaulting to 100 MB", queueByteDefault)
+	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
 	if err != nil {
+		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
 	//create new client
 	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
-		log.Fatalf("getClient failed in FLBPlugininit: %s", err)
+		log.Printf("Creating a new managed BigQuery Storage write client scoped to: %s failed in FLBPluginInit: %s", projectID, err)
 		return output.FLB_ERROR
 	}
 
-	//use getDescriptors to get the message descriptor, and descriptor proto
-	md, descriptor := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
-
 	// streamname
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
+
+	//use getDescriptors to get the message descriptor, and descriptor proto
+	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
+	if err != nil {
+		log.Printf("Getting message descriptor and descriptor proto for table: %s failed in FLBPluginInit: %s", tableReference, err)
+		return output.FLB_ERROR
+	}
 
 	// Create stream using NewManagedStream
 	managedStream, err := client.NewManagedStream(ms_ctx,
@@ -310,7 +312,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
-		log.Fatalf("NewManagedStream failed in FLBPluginInit: %s", err)
+		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
 	}
 
@@ -350,13 +352,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Fatalf("Error in finding configuration: Skipping Flush for id %d", id)
+		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginFlushCtx", id)
 		return output.FLB_ERROR
 	}
 
 	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
 	if responseErr != nil {
-		log.Printf("error in checking responses noticed in flush: %s", responseErr)
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, responseErr)
 		return output.FLB_ERROR
 	}
 
@@ -378,7 +380,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		//transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
 		buf, err := jsonToBinary(config.messageDescriptor, rowJSONMap)
 		if err != nil {
-			log.Fatal("converting from json to binary failed: ", err)
+			log.Printf("Transforming records from JSON to binary data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 
@@ -386,6 +388,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			// Appending Rows
 			err := sendRequest(ms_ctx, binaryData, &config)
 			if err != nil {
+				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
 			}
 
@@ -401,6 +404,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Appending Rows
 	err := sendRequest(ms_ctx, binaryData, &config)
 	if err != nil {
+		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
 	}
 
@@ -421,26 +425,26 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Error in finding configuration: Skipping Exit for id %d", id)
+		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginExitCtx", id)
 		return output.FLB_ERROR
 	}
 
 	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex)
 	if responseErr != nil {
-		log.Printf("error in checking responses noticed in flush: %s", responseErr)
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx: %s", id, responseErr)
 		return output.FLB_ERROR
 	}
 
 	if config.managedStream != nil {
 		if err = config.managedStream.Close(); err != nil {
-			log.Printf("Couldn't close managed stream:%v", err)
+			log.Printf("Closing managed stream for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 	}
 
 	if config.client != nil {
 		if err = config.client.Close(); err != nil {
-			log.Printf("Couldn't close managed writer client:%v", err)
+			log.Printf("Closing managed writer client for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 	}
