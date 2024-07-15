@@ -44,10 +44,10 @@ type outputConfig struct {
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
 	mutex             sync.Mutex
+	exactlyOnce       bool
 }
 
 var (
-	err       error
 	ms_ctx    = context.Background()
 	configMap = make(map[int]*outputConfig)
 	configID  = 0
@@ -178,6 +178,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 func getConfigField(plugin unsafe.Pointer, key string, defaultval int) (int, error) {
 	currstr := output.FLBPluginConfigKey(plugin, key)
 	finval := defaultval
+	var err error
 	if currstr != "" {
 		finval, err = strconv.Atoi(currstr)
 		if err != nil {
@@ -262,6 +263,12 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
+	//set exactly-once bool from config file param
+	exactlyOnceVal, err := strconv.ParseBool(output.FLBPluginConfigKey(plugin, "Exactly_Once"))
+	if err != nil {
+		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
+	}
+
 	//optional maxchunksize param
 	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", chunkSizeLimit)
 	if err != nil {
@@ -301,9 +308,17 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
+	//set the stream type based on exactly once parameter
+	var currStreamType managedwriter.StreamType
+	if exactlyOnceVal {
+		currStreamType = managedwriter.CommittedStream
+	} else {
+		currStreamType = managedwriter.DefaultStream
+	}
+
 	// Create stream using NewManagedStream
 	managedStream, err := client.NewManagedStream(ms_ctx,
-		managedwriter.WithType(managedwriter.DefaultStream),
+		managedwriter.WithType(currStreamType),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
@@ -325,6 +340,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
+		exactlyOnce:       exactlyOnceVal,
 	}
 
 	configMap[configID] = &config
@@ -436,14 +452,19 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 
 	if config.managedStream != nil {
-		if err = config.managedStream.Close(); err != nil {
+		if config.exactlyOnce {
+			if _, err := config.managedStream.Finalize(ms_ctx); err != nil {
+				log.Printf("Finalizing managed stream for output instance with id: %d failed in FLBPluginExit: %s", id, err)
+			}
+		}
+		if err := config.managedStream.Close(); err != nil {
 			log.Printf("Closing managed stream for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 	}
 
 	if config.client != nil {
-		if err = config.client.Close(); err != nil {
+		if err := config.client.Close(); err != nil {
 			log.Printf("Closing managed writer client for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
