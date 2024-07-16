@@ -45,6 +45,7 @@ type outputConfig struct {
 	appendResults     *[]*managedwriter.AppendResult
 	mutex             sync.Mutex
 	exactlyOnce       bool
+	offsetCounter     int64
 }
 
 var (
@@ -205,11 +206,23 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 	if len(data) > 0 {
 		(*config).mutex.Lock()
 		defer (*config).mutex.Unlock()
-		appendResult, err := (*config).managedStream.AppendRows(ctx, data)
+		var appendResult *managedwriter.AppendResult
+		var err error
+		if (*config).exactlyOnce {
+			appendResult, err = (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
+		} else {
+			appendResult, err = (*config).managedStream.AppendRows(ctx, data)
+		}
 		if err != nil {
 			return err
 		}
 		*(*config).appendResults = append(*(*config).appendResults, appendResult)
+	}
+	if (*config).exactlyOnce {
+		err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -323,10 +336,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	//set the stream type based on exactly once parameter
 	var currStreamType managedwriter.StreamType
+	var enableRetries bool
 	if exactlyOnceVal {
 		currStreamType = managedwriter.CommittedStream
+		enableRetries = false
 	} else {
 		currStreamType = managedwriter.DefaultStream
+		enableRetries = true
 	}
 
 	// Create stream using NewManagedStream
@@ -335,7 +351,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
-		managedwriter.EnableWriteRetries(true),
+		managedwriter.EnableWriteRetries(enableRetries),
 		managedwriter.WithMaxInflightBytes(queueByteSize),
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
@@ -395,6 +411,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
 	var currsize int
+	//keeps track of the number of rows previously sent
+	var rowCounter int64
+
 	// Iterate Records
 	for {
 		// Extract Record
@@ -421,6 +440,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				return output.FLB_ERROR
 			}
 
+			config.offsetCounter += rowCounter
+			rowCounter = 0
+
 			binaryData = nil
 			currsize = 0
 
@@ -428,6 +450,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		binaryData = append(binaryData, buf)
 		//include the protobuf overhead to the currsize variable
 		currsize += (len(buf) + 2)
+		rowCounter++
 
 	}
 	// Appending Rows
@@ -436,6 +459,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
 	}
+
+	config.offsetCounter += rowCounter
 
 	return output.FLB_OK
 }
