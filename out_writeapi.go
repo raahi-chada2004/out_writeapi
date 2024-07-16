@@ -57,6 +57,7 @@ const (
 	chunkSizeLimit      = 9 * 1024 * 1024
 	queueRequestDefault = 1000
 	queueByteDefault    = 100 * 1024 * 1024
+	exactlyOnceDefault  = false
 )
 
 // This function handles getting data on the schema of the table data is being written to.
@@ -175,15 +176,27 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
-func getConfigField(plugin unsafe.Pointer, key string, defaultval int) (int, error) {
+func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval T) (T, error) {
 	currstr := output.FLBPluginConfigKey(plugin, key)
 	finval := defaultval
-	var err error
 	if currstr != "" {
-		finval, err = strconv.Atoi(currstr)
-		if err != nil {
-			return finval, err
+		switch any(defaultval).(type) {
+		case int:
+			intval, err := strconv.Atoi(currstr)
+			if err != nil {
+				return defaultval, err
+			} else {
+				finval = any(intval).(T)
+			}
+		case bool:
+			boolval, err := strconv.ParseBool(currstr)
+			if err != nil {
+				return defaultval, err
+			} else {
+				finval = any(boolval).(T)
+			}
 		}
+
 	}
 	return finval, nil
 }
@@ -264,7 +277,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
 	//set exactly-once bool from config file param
-	exactlyOnceVal, err := strconv.ParseBool(output.FLBPluginConfigKey(plugin, "Exactly_Once"))
+	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
 	}
