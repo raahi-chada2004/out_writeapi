@@ -208,20 +208,26 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 		defer (*config).mutex.Unlock()
 		var appendResult *managedwriter.AppendResult
 		var err error
+
 		if (*config).exactlyOnce {
 			appendResult, err = (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
+			if err != nil {
+				return err
+			}
+
+			*(*config).appendResults = append(*(*config).appendResults, appendResult)
+
+			err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
+			if err != nil {
+				return err
+			}
 		} else {
 			appendResult, err = (*config).managedStream.AppendRows(ctx, data)
-		}
-		if err != nil {
-			return err
-		}
-		*(*config).appendResults = append(*(*config).appendResults, appendResult)
-	}
-	if (*config).exactlyOnce {
-		err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
+
+			*(*config).appendResults = append(*(*config).appendResults, appendResult)
 		}
 	}
 	return nil
