@@ -169,8 +169,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	origRequestFunc := sendRequest
 	sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
 		if len(data) > 0 {
-			(*config).mutex.Lock()
-			defer (*config).mutex.Unlock()
 			_, err := (*config).managedStream.AppendRows(ctx, data)
 			if err != nil {
 				return err
