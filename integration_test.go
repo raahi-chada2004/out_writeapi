@@ -340,6 +340,8 @@ func generateData(numRows int) error {
 			return err
 		}
 		logger.Println(string(entry))
+
+		time.Sleep(2 * time.Second)
 	}
 
 	return nil
