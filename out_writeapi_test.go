@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
-	_ "log"
 	"testing"
 	"unsafe"
 
@@ -75,13 +75,12 @@ func (m *MockManagedWriterClient) CreateWriteStream(ctx context.Context, req *st
 }
 
 type StreamChecks struct {
-	calledGetContext     int
-	calledcheckResponses int
-	createDecoder        int
-	gotRecord            int
-	appendRows           int
-	appendQueue          int
-	checkReady           int
+	calledGetContext int
+	createDecoder    int
+	gotRecord        int
+	appendRows       int
+	appendQueue      int
+	checkReady       int
 }
 
 type MockManagedStream struct {
@@ -199,22 +198,26 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	}
 	defer func() { getFLBPluginContext = orgFunc }()
 
-	patchCheckResponses := monkey.Patch(checkResponses, func(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
-		checks.calledcheckResponses++
-		for len(*currQueuePointer) > 0 {
-			if res[0] {
-				checks.checkReady++
-				if res[1] {
-					checks.appendQueue++
-					return 0
-				}
-				return 1
-			}
-			return 1
+	origReadyFunc := isReady
+	isReady = func(queueHead *managedwriter.AppendResult) bool {
+		if res[0] {
+			return true
+		} else {
+			return false
 		}
-		return 0
-	})
-	defer patchCheckResponses.Unpatch()
+	}
+	defer func() { isReady = origReadyFunc }()
+
+	origResultFunc := pluginGetResult
+	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
+		if res[1] {
+			checks.appendQueue++
+			return -1, nil
+		}
+		err := errors.New("Failed to Get Result")
+		return 0, err
+	}
+	defer func() { pluginGetResult = origResultFunc }()
 
 	patchDecoder := monkey.Patch(output.NewDecoder, func(data unsafe.Pointer, length int) *output.FLBDecoder {
 		checks.createDecoder++
@@ -256,7 +259,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
 	assert.Equal(t, 2, checks.appendRows)
-	assert.Equal(t, 2, checks.calledcheckResponses)
 	assert.Equal(t, 2, checks.calledGetContext)
 	assert.Equal(t, 1, checks.appendQueue)
 	assert.Equal(t, 2, checks.createDecoder)

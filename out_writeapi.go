@@ -126,6 +126,15 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	return m
 }
 
+var isReady = func(queueHead *managedwriter.AppendResult) bool {
+	<-queueHead.Ready()
+	return true
+}
+
+var pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
+	return queueHead.GetResult(ctx)
+}
+
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
@@ -133,7 +142,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
-			recvOffset, err := queueHead.GetResult(curr_ctx)
+			recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
 				log.Fatal("error in checking responses")
@@ -141,9 +150,9 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
-			select {
-			case <-queueHead.Ready():
-				recvOffset, err := queueHead.GetResult(curr_ctx)
+			switch isReady(queueHead) {
+			case true:
+				recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
 					log.Fatal("error in checking responses")
