@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"testing"
 	"unsafe"
@@ -13,6 +14,8 @@ import (
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // this is a mock struct describing the states of the plugin after being register
@@ -141,9 +144,33 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	defer func() { getClient = originalFunc }()
 
 	res := []bool{}
+	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
 			checks.appendRows++
+
+			var combinedData []byte
+			for _, tempData := range data {
+				combinedData = append(combinedData, tempData...)
+			}
+
+			message := dynamicpb.NewMessage(md)
+			err := proto.Unmarshal(combinedData, message)
+			if err != nil {
+				return nil, fmt.Errorf("Failed to unmarshal")
+			}
+
+			textField := message.Get(md.Fields().ByJSONName("Text"))
+			timeField := message.Get(md.Fields().ByJSONName("Time"))
+
+			if textField.String() != "FOO" && textField.String() != "BAR" {
+				return nil, fmt.Errorf("Wrong Text Value: %s", textField.String())
+			}
+			log.Printf("String: %s", textField.String())
+			if timeField.String() != "000" {
+				return nil, fmt.Errorf("Wrong Time Value")
+			}
+
 			res = append(res, true)
 			res = append(res, true)
 			return nil, nil
@@ -164,19 +191,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		return mockMS, nil
 	}
 	defer func() { getWriter = origFunc }()
-
-	origRequestFunc := sendRequest
-	sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
-		if len(data) > 0 {
-			_, err := (*config).managedStream.AppendRows(ctx, data)
-			if err != nil {
-				return err
-			}
-			*(*config).appendResults = append(*(*config).appendResults, nil)
-		}
-		return nil
-	}
-	defer func() { sendRequest = origRequestFunc }()
 
 	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
 		return ""
@@ -236,16 +250,25 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			return 0, nil, dummyRecord
 		} else {
 			loopCount++
-			dummyRecord["Text"] = []byte{66, 65, 82}
-			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 1, nil, dummyRecord
 		}
 	})
 	defer patchRecord.Unpatch()
 
-	// Gets config so we can check length of initial results queue
+	origRequestFunc := sendRequest
+	sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
+		if len(data) > 0 {
+			_, err := (*config).managedStream.AppendRows(ctx, data)
+			if err != nil {
+				return err
+			}
+			*(*config).appendResults = append(*(*config).appendResults, nil)
+		}
+		return nil
+	}
+	defer func() { sendRequest = origRequestFunc }()
+
 	config := configMap[setID]
-	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	config.messageDescriptor = md
 
 	// Converts id (int) to type unsafe.Pointer to be used as the ctx
@@ -255,6 +278,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 	result = FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
+	print(result)
 
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
