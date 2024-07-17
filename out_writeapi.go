@@ -14,6 +14,7 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -25,7 +26,7 @@ import (
 type outputConfig struct {
 	messageDescriptor protoreflect.MessageDescriptor
 	managedStream     MWManagedStream
-	client            *managedwriter.Client
+	client            ManagedWriterClient
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
 	mutex             sync.Mutex
@@ -42,7 +43,7 @@ var (
 // projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
 // NewManagedStream as shown in line 54 and 63 of source.go).
 
-func getDescriptors(curr_ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -158,18 +159,81 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	return 0
 }
 
+type ManagedWriterClient interface {
+	NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
+	GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+	Close() error
+	BatchCommitWriteStreams(ctx context.Context, req *storagepb.BatchCommitWriteStreamsRequest, opts ...gax.CallOption) (*storagepb.BatchCommitWriteStreamsResponse, error)
+	CreateWriteStream(ctx context.Context, req *storagepb.CreateWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+}
+
+type realManagedWriterClient struct {
+	currClient *managedwriter.Client
+}
+
+func (r *realManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+	return r.currClient.NewManagedStream(ctx, opts...)
+
+}
+
+func (r *realManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return r.currClient.GetWriteStream(ctx, req, opts...)
+}
+
+func (r *realManagedWriterClient) Close() error {
+	return r.currClient.Close()
+}
+
+func (r *realManagedWriterClient) BatchCommitWriteStreams(ctx context.Context, req *storagepb.BatchCommitWriteStreamsRequest, opts ...gax.CallOption) (*storagepb.BatchCommitWriteStreamsResponse, error) {
+	return r.currClient.BatchCommitWriteStreams(ctx, req, opts...)
+}
+
+func (r *realManagedWriterClient) CreateWriteStream(ctx context.Context, req *storagepb.CreateWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return r.currClient.CreateWriteStream(ctx, req, opts...)
+}
+
+// this function acts as a wrapper for the managedwriter.NewClient function in order to inject a mock interface, one can
+// override the getClient method to return a different struct type (that still implements the managedwriterclient interface)
+var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+	client, err := managedwriter.NewClient(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &realManagedWriterClient{currClient: client}, nil
+}
+
 type MWManagedStream interface {
 	AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
 	Close() error
+	Finalize(ctx context.Context, opts ...gax.CallOption) (int64, error)
+	FlushRows(ctx context.Context, offset int64, opts ...gax.CallOption) (int64, error)
+	StreamName() string
 }
 
 // To inject a mock interface, I override getWriter and getContext
-var getWriter = func(client *managedwriter.Client, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+var getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
 	return client.NewManagedStream(ctx, opts...)
 }
 
-var getContext = func(ctx unsafe.Pointer) int {
+var getFLBPluginContext = func(ctx unsafe.Pointer) int {
 	return output.FLBPluginGetContext(ctx).(int)
+}
+
+var getQueueLen = func(currQueue *[]*managedwriter.AppendResult) int {
+	return len(*currQueue)
+}
+
+var sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
+	if len(data) > 0 {
+		(*config).mutex.Lock()
+		defer (*config).mutex.Unlock()
+		appendResult, err := (*config).managedStream.AppendRows(ctx, data)
+		if err != nil {
+			return err
+		}
+		*(*config).appendResults = append(*(*config).appendResults, appendResult)
+	}
+	return nil
 }
 
 //export FLBPluginRegister
@@ -227,7 +291,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	//create new client
-	client, err := managedwriter.NewClient(ms_ctx, projectID)
+	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
 		log.Fatal(err)
 		return output.FLB_ERROR
@@ -286,7 +350,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	id := getContext(ctx)
+	id := getFLBPluginContext(ctx)
 	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
@@ -326,14 +390,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			return output.FLB_ERROR
 		}
 
-		if ((currsize + len(buf)) > config.maxChunkSize) && len(binaryData) != 0 {
+		if (currsize + len(buf)) > config.maxChunkSize {
 			// Appending Rows
-			stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
+			err := sendRequest(ms_ctx, binaryData, &config)
 			if err != nil {
-				log.Fatal("AppendRows: ", err)
+				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
 			}
-			*config.appendResults = append(*config.appendResults, stream)
 
 			binaryData = nil
 			currsize = 0
@@ -344,16 +407,10 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	}
 
-	if len(binaryData) > 0 {
-		// Appending Rows
-		stream, err := config.managedStream.AppendRows(ms_ctx, binaryData)
-		if err != nil {
-			log.Fatal("AppendRows: ", err)
-			return output.FLB_ERROR
-		}
-		*config.appendResults = append(*config.appendResults, stream)
-
-		log.Println("Done")
+	err := sendRequest(ms_ctx, binaryData, &config)
+	if err != nil {
+		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
+		return output.FLB_ERROR
 	}
 
 	return output.FLB_OK

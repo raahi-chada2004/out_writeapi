@@ -8,11 +8,11 @@ import (
 	"unsafe"
 
 	"bou.ke/monkey"
+	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"cloud.google.com/go/bigquery/storage/managedwriter"
 	"github.com/fluent/fluent-bit-go/output"
+	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // this is a mock struct describing the states of the plugin after being register
@@ -45,26 +45,68 @@ func TestFLBPluginRegister(t *testing.T) {
 
 }
 
+type MockManagedWriterClient struct {
+	client                      *managedwriter.Client
+	NewManagedStreamFunc        func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
+	GetWriteStreamFunc          func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+	CloseFunc                   func() error
+	BatchCommitWriteStreamsFunc func(ctx context.Context, req *storagepb.BatchCommitWriteStreamsRequest, opts ...gax.CallOption) (*storagepb.BatchCommitWriteStreamsResponse, error)
+	CreateWriteStreamFunc       func(ctx context.Context, req *storagepb.CreateWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
+}
+
+func (m *MockManagedWriterClient) NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+	return m.NewManagedStreamFunc(ctx, opts...)
+}
+
+func (m *MockManagedWriterClient) GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return m.GetWriteStreamFunc(ctx, req, opts...)
+}
+
+func (m *MockManagedWriterClient) Close() error {
+	return m.client.Close()
+}
+
+func (m *MockManagedWriterClient) BatchCommitWriteStreams(ctx context.Context, req *storagepb.BatchCommitWriteStreamsRequest, opts ...gax.CallOption) (*storagepb.BatchCommitWriteStreamsResponse, error) {
+	return m.client.BatchCommitWriteStreams(ctx, req, opts...)
+}
+
+func (m *MockManagedWriterClient) CreateWriteStream(ctx context.Context, req *storagepb.CreateWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+	return m.client.CreateWriteStream(ctx, req, opts...)
+}
+
 type StreamChecks struct {
-	calledGetContext     bool
-	calledcheckResponses bool
-	createDecoder        bool
-	gotRecord            bool
-	calledparseMap       bool
-	calledJTB            bool
-	appendRows           bool
-	appendQueue          bool
+	calledGetContext     int
+	calledcheckResponses int
+	createDecoder        int
+	gotRecord            int
+	appendRows           int
+	appendQueue          int
+	checkReady           int
 }
 
 type MockManagedStream struct {
 	managedstream  *managedwriter.ManagedStream
 	AppendRowsFunc func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
-	StreamName     func() string
 	CloseFunc      func() error
+	FinalizeFunc   func(ctx context.Context, opts ...gax.CallOption) (int64, error)
+	FlushRowsFunc  func(ctx context.Context, offset int64, opts ...gax.CallOption) (int64, error)
+	StreamNameFunc func() string
 }
 
 func (m *MockManagedStream) AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
 	return m.AppendRowsFunc(ctx, data, opts...)
+}
+
+func (m *MockManagedStream) Finalize(ctx context.Context, opts ...gax.CallOption) (int64, error) {
+	return m.FinalizeFunc(ctx, opts...)
+}
+
+func (m *MockManagedStream) FlushRows(ctx context.Context, offset int64, opts ...gax.CallOption) (int64, error) {
+	return m.FlushRowsFunc(ctx, offset, opts...)
+}
+
+func (m *MockManagedStream) StreamName() string {
+	return m.StreamNameFunc()
 }
 
 func (m *MockManagedStream) Close() error {
@@ -72,115 +114,153 @@ func (m *MockManagedStream) Close() error {
 }
 
 func TestFLBPluginFlushCtx(t *testing.T) {
-	var checks StreamChecks
-	var setID interface{}
-	var id int
-
-	mockMS := &MockManagedStream{
-		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
-			checks.appendRows = true
+	checks := new(StreamChecks)
+	var setID int
+	mockClient := &MockManagedWriterClient{
+		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
 			return nil, nil
+
+		},
+		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+			return &storagepb.WriteStream{
+				Name: "mockstream",
+				TableSchema: &storagepb.TableSchema{
+					Fields: []*storagepb.TableFieldSchema{
+						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+					},
+				},
+			}, nil
 		},
 	}
 
-	originalFunc := getWriter
-	getWriter = func(client *managedwriter.Client, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+	originalFunc := getClient
+	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+		log.Println("Mock ManagedWriterClient called")
+		return mockClient, nil
+	}
+	defer func() { getClient = originalFunc }()
+
+	res := []bool{}
+	mockMS := &MockManagedStream{
+		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
+			checks.appendRows++
+			res = append(res, true)
+			res = append(res, true)
+			return nil, nil
+		},
+		FinalizeFunc: func(ctx context.Context, opts ...gax.CallOption) (int64, error) {
+			return 0, nil
+		},
+		FlushRowsFunc: func(ctx context.Context, offset int64, opts ...gax.CallOption) (int64, error) {
+			return 0, nil
+		},
+		StreamNameFunc: func() string {
+			return ""
+		},
+	}
+
+	origFunc := getWriter
+	getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
 		return mockMS, nil
 	}
-	defer func() { getWriter = originalFunc }()
+	defer func() { getWriter = origFunc }()
+
+	origRequestFunc := sendRequest
+	sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
+		if len(data) > 0 {
+			(*config).mutex.Lock()
+			defer (*config).mutex.Unlock()
+			_, err := (*config).managedStream.AppendRows(ctx, data)
+			if err != nil {
+				return err
+			}
+			*(*config).appendResults = append(*(*config).appendResults, nil)
+		}
+		return nil
+	}
+	defer func() { sendRequest = origRequestFunc }()
 
 	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
 		return ""
 	})
 	defer patch1.Unpatch()
 
-	patchDescriptor := monkey.Patch(getDescriptors, func(curr_ctx context.Context, managed_writer_client *managedwriter.Client, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
-		return nil, nil
-	})
-	defer patchDescriptor.Unpatch()
-
 	patchSetContext := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
-		log.Println("Ran set context")
-		setID = ctx
+		setID = ctx.(int)
 	})
 	defer patchSetContext.Unpatch()
 
 	plugin := unsafe.Pointer(nil)
-	// ctx := unsafe.Pointer(nil)
 	initRes := FLBPluginInit(plugin)
 
-	orgFunc := getContext
-	getContext = func(ctx unsafe.Pointer) int {
-		checks.calledGetContext = true
-		uintptrValueBack := uintptr(ctx)
-		id = int(uintptrValueBack)
-		return id
+	orgFunc := getFLBPluginContext
+	getFLBPluginContext = func(ctx unsafe.Pointer) int {
+		checks.calledGetContext++
+		return setID
 	}
-	defer func() { getContext = orgFunc }()
+	defer func() { getFLBPluginContext = orgFunc }()
 
 	patchCheckResponses := monkey.Patch(checkResponses, func(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
-		checks.calledcheckResponses = true
+		checks.calledcheckResponses++
+		for len(*currQueuePointer) > 0 {
+			if res[0] {
+				checks.checkReady++
+				if res[1] {
+					checks.appendQueue++
+					return 0
+				}
+				return 1
+			}
+			return 1
+		}
 		return 0
 	})
 	defer patchCheckResponses.Unpatch()
 
 	patchDecoder := monkey.Patch(output.NewDecoder, func(data unsafe.Pointer, length int) *output.FLBDecoder {
-		checks.createDecoder = true
+		checks.createDecoder++
 		return nil
 	})
 	defer patchDecoder.Unpatch()
 
 	var loopCount int = 0
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
-		checks.gotRecord = true
+		checks.gotRecord++
+		dummyRecord := make(map[interface{}]interface{})
 		if loopCount%2 == 0 {
 			loopCount++
-			return 0, nil, nil
+			dummyRecord["Text"] = []byte{70, 79, 79}
+			dummyRecord["Time"] = []byte{48, 48, 48}
+			return 0, nil, dummyRecord
 		} else {
 			loopCount++
-			return 1, nil, nil
+			dummyRecord["Text"] = []byte{66, 65, 82}
+			dummyRecord["Time"] = []byte{48, 48, 48}
+			return 1, nil, dummyRecord
 		}
 	})
 	defer patchRecord.Unpatch()
 
-	patchParse := monkey.Patch(parseMap, func(mapInterface map[interface{}]interface{}) map[string]interface{} {
-		checks.calledparseMap = true
-		return nil
-	})
-	defer patchParse.Unpatch()
-
-	patchJTB := monkey.Patch(json_to_binary, func(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
-		checks.calledJTB = true
-		tempBD := make([]byte, 1)
-		tempBD[0] = 1
-		return tempBD, nil
-	})
-	defer patchJTB.Unpatch()
-
 	// Gets config so we can check length of initial results queue
-	config := configMap[id]
-	initsize := len(*config.appendResults)
+	config := configMap[setID]
+	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
+	config.messageDescriptor = md
 
 	// Converts id (int) to type unsafe.Pointer to be used as the ctx
-	intValue := setID.(int)
-	uintptrValue := uintptr(intValue)
+	uintptrValue := uintptr(setID)
 	pointerValue := unsafe.Pointer(uintptrValue)
 
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 	result = FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 
-	finsize := len(*config.appendResults)
-	if finsize-2 == initsize {
-		checks.appendQueue = true
-	}
-
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
-	assert.True(t, checks.appendRows)
-	assert.True(t, checks.calledcheckResponses)
-	assert.True(t, checks.calledGetContext)
-	assert.True(t, checks.appendQueue)
-	assert.True(t, checks.createDecoder)
-	assert.True(t, checks.gotRecord)
+	assert.Equal(t, 2, checks.appendRows)
+	assert.Equal(t, 2, checks.calledcheckResponses)
+	assert.Equal(t, 2, checks.calledGetContext)
+	assert.Equal(t, 1, checks.appendQueue)
+	assert.Equal(t, 2, checks.createDecoder)
+	assert.Equal(t, 4, checks.gotRecord)
 }
