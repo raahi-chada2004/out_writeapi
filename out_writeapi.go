@@ -216,7 +216,7 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 			}
 
 			*(*config).appendResults = append(*(*config).appendResults, appendResult)
-
+			//synchronously check the response immediately after appending data with exactly once semantics
 			err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
 			if err != nil {
 				return err
@@ -345,7 +345,6 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	var enableRetries bool
 	if exactlyOnceVal {
 		currStreamType = managedwriter.CommittedStream
-		enableRetries = false
 	} else {
 		currStreamType = managedwriter.DefaultStream
 		enableRetries = true
