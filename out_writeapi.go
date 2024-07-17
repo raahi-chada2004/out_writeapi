@@ -46,6 +46,7 @@ type outputConfig struct {
 	mutex             sync.Mutex
 	exactlyOnce       bool
 	offsetCounter     int64
+	currRows          int64
 }
 
 var (
@@ -221,6 +222,8 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 			if err != nil {
 				return err
 			}
+
+			(*config).offsetCounter = (*config).currRows
 		} else {
 			appendResult, err = (*config).managedStream.AppendRows(ctx, data)
 			if err != nil {
@@ -375,6 +378,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
 		exactlyOnce:       exactlyOnceVal,
+		offsetCounter:     0,
+		currRows:          0,
 	}
 
 	configMap[configID] = &config
@@ -416,8 +421,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
 	var currsize int
-	//keeps track of the number of rows previously sent
-	var rowCounter int64
 
 	// Iterate Records
 	for {
@@ -445,9 +448,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				return output.FLB_ERROR
 			}
 
-			config.offsetCounter += rowCounter
-			rowCounter = 0
-
 			binaryData = nil
 			currsize = 0
 
@@ -455,7 +455,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		binaryData = append(binaryData, buf)
 		//include the protobuf overhead to the currsize variable
 		currsize += (len(buf) + 2)
-		rowCounter++
+		config.currRows++
 
 	}
 	// Appending Rows
@@ -464,8 +464,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
 	}
-
-	config.offsetCounter += rowCounter
 
 	return output.FLB_OK
 }
