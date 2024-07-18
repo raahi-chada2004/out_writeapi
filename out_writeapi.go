@@ -148,9 +148,7 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 // This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) error {
-	(*currMutex).Lock()
-	defer (*currMutex).Unlock()
+func checkResponsesNonLocking(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) error {
 	for len(*currQueuePointer) > 0 {
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
@@ -174,6 +172,13 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 
 	}
 	return nil
+}
+
+// this function locks the relevant mutex before calling checkResponses
+func checkResponsesLocking(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) error {
+	(*currMutex).Lock()
+	defer (*currMutex).Unlock()
+	return checkResponsesNonLocking(curr_ctx, currQueuePointer, waitForResponse)
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
@@ -217,7 +222,8 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 
 			*(*config).appendResults = append(*(*config).appendResults, appendResult)
 			//synchronously check the response immediately after appending data with exactly once semantics
-			err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
+			//call checkResponsesNonLocking as the relevant mutex is already locked
+			err := checkResponsesNonLocking(ms_ctx, (*config).appendResults, true)
 			if err != nil {
 				return err
 			}
@@ -406,7 +412,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
+	responseErr := checkResponsesLocking(ms_ctx, config.appendResults, false, &config.mutex)
 	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, responseErr)
 		return output.FLB_ERROR
@@ -488,7 +494,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex)
+	responseErr := checkResponsesLocking(ms_ctx, config.appendResults, true, &config.mutex)
 	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx: %s", id, responseErr)
 		return output.FLB_ERROR
