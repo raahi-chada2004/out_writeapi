@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
+import "time"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
@@ -46,6 +47,7 @@ type outputConfig struct {
 	mutex             sync.Mutex
 	exactlyOnce       bool
 	offsetCounter     int64
+	numRetries        int
 }
 
 var (
@@ -59,6 +61,7 @@ const (
 	queueRequestDefault = 1000
 	queueByteDefault    = 100 * 1024 * 1024
 	exactlyOnceDefault  = false
+	numRetriesDefault   = 4
 )
 
 // This function handles getting data on the schema of the table data is being written to.
@@ -215,18 +218,31 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) erro
 		var err error
 
 		if (*config).exactlyOnce {
-			appendResult, err = (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
-			if err != nil {
-				return err
+			retryer := newStatelessRetryer((*config).numRetries)
+			attempt := 0
+
+			for {
+				appendResult, err = (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
+				if err != nil {
+					return err
+				}
+
+				*(*config).appendResults = append(*(*config).appendResults, appendResult)
+				//synchronously check the response immediately after appending data with exactly once semantics
+				//call checkResponsesNonLocking as the relevant mutex is already locked
+				err := checkResponsesNonLocking(ms_ctx, (*config).appendResults, true)
+				if err == nil {
+					break
+				}
+
+				backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
+				if !shouldRetry {
+					return err
+				}
+				attempt++
+				time.Sleep(backoffPeriod)
 			}
 
-			*(*config).appendResults = append(*(*config).appendResults, appendResult)
-			//synchronously check the response immediately after appending data with exactly once semantics
-			//call checkResponsesNonLocking as the relevant mutex is already locked
-			err := checkResponsesNonLocking(ms_ctx, (*config).appendResults, true)
-			if err != nil {
-				return err
-			}
 		} else {
 			appendResult, err = (*config).managedStream.AppendRows(ctx, data)
 			if err != nil {
@@ -306,6 +322,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
 	}
+	//optional num synchronous retries parameter
+	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
+	if err != nil {
+		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
+	}
 
 	//optional maxchunksize param
 	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", chunkSizeLimit)
@@ -381,6 +402,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
 		exactlyOnce:       exactlyOnceVal,
+		offsetCounter:     0,
+		numRetries:        numRetriesVal,
 	}
 
 	configMap[configID] = &config
