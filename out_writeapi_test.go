@@ -227,21 +227,20 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	})
 	defer patchDecoder.Unpatch()
 
-	var rowCount int = 0
+	var rowSent int = 0
+	var rowCount int = 2
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
 		checks.gotRecord++
 		dummyRecord := make(map[interface{}]interface{})
-		if rowCount%2 == 0 {
-			rowCount++
+		if rowSent < rowCount {
+			rowSent++
 			// Represents "FOO" in bytes as the data for the Text field
 			dummyRecord["Text"] = []byte{70, 79, 79}
 			// Represents "000" in bytes as the data for the Time field
 			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 0, nil, dummyRecord
-		} else {
-			rowCount++
-			return 1, nil, nil
 		}
+		return 1, nil, nil
 	})
 	defer patchRecord.Unpatch()
 
@@ -261,7 +260,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	assert.Equal(t, output.FLB_OK, result)
 	assert.Equal(t, 2, checks.appendRows)
 	assert.Equal(t, 2, checks.calledGetContext)
-	assert.Equal(t, 1, checks.appendQueue)
+	assert.Equal(t, 2, checks.appendQueue)
 	assert.Equal(t, 2, checks.createDecoder)
 	assert.Equal(t, 4, checks.gotRecord)
 }
