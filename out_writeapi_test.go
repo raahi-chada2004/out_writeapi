@@ -165,13 +165,11 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 			if textField.String() != "FOO" {
 				checks.checkProtoText = false
-			} else {
-				checks.checkProtoText = true
+				assert.True(t, checks.checkProtoText)
 			}
 			if timeField.String() != "000" {
 				checks.checkProtoTime = false
-			} else {
-				checks.checkProtoTime = true
+				assert.True(t, checks.checkProtoTime)
 			}
 
 			res = append(res, true)
@@ -237,20 +235,20 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	})
 	defer patchDecoder.Unpatch()
 
-	var loopCount int = 0
+	var rowCount int = 0
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
 		checks.gotRecord++
 		dummyRecord := make(map[interface{}]interface{})
-		if loopCount%2 == 0 {
-			loopCount++
+		if rowCount%2 == 0 {
+			rowCount++
 			// Represents "FOO" in bytes as the data for the Text field
 			dummyRecord["Text"] = []byte{70, 79, 79}
 			// Represents "000" in bytes as the data for the Time field
 			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 0, nil, dummyRecord
 		} else {
-			loopCount++
-			return 1, nil, dummyRecord
+			rowCount++
+			return 1, nil, nil
 		}
 	})
 	defer patchRecord.Unpatch()

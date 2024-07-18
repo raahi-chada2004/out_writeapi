@@ -154,8 +154,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
-			switch isReady(queueHead) {
-			case true:
+			if isReady(queueHead) {
 				recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
@@ -163,7 +162,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 					return 1
 				}
 				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
-			default:
+			} else {
 				return 0
 			}
 		}
@@ -234,7 +233,7 @@ var getFLBPluginContext = func(ctx unsafe.Pointer) int {
 	return output.FLBPluginGetContext(ctx).(int)
 }
 
-var sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
+func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
 	if len(data) > 0 {
 		(*config).mutex.Lock()
 		defer (*config).mutex.Unlock()
