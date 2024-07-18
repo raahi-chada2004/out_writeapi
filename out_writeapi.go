@@ -126,13 +126,17 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	return m
 }
 
-var isReady = func(queueHead *managedwriter.AppendResult) bool {
-	<-queueHead.Ready()
-	return true
+var isReady = func(result *managedwriter.AppendResult) bool {
+	select {
+	case <-result.Ready():
+		return true
+	default:
+		return false
+	}
 }
 
-var pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
-	return queueHead.GetResult(ctx)
+var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Context) (int64, error) {
+	return result.GetResult(ctx)
 }
 
 // this function is used for asynchronous WriteAPI response checking
@@ -224,12 +228,10 @@ var getWriter = func(client ManagedWriterClient, ctx context.Context, projectID 
 	return client.NewManagedStream(ctx, opts...)
 }
 
+// This function acts as a wrapper for the GetContext function so that we may override it to
+// mock it whenever needed
 var getFLBPluginContext = func(ctx unsafe.Pointer) int {
 	return output.FLBPluginGetContext(ctx).(int)
-}
-
-var getQueueLen = func(currQueue *[]*managedwriter.AppendResult) int {
-	return len(*currQueue)
 }
 
 var sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"testing"
 	"unsafe"
 
@@ -84,6 +83,8 @@ type StreamChecks struct {
 	appendRows       int
 	appendQueue      int
 	checkReady       int
+	checkProtoText   bool
+	checkProtoTime   bool
 }
 
 type MockManagedStream struct {
@@ -138,7 +139,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	originalFunc := getClient
 	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
-		log.Println("Mock ManagedWriterClient called")
 		return mockClient, nil
 	}
 	defer func() { getClient = originalFunc }()
@@ -163,15 +163,17 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			textField := message.Get(md.Fields().ByJSONName("Text"))
 			timeField := message.Get(md.Fields().ByJSONName("Time"))
 
-			if textField.String() != "FOO" && textField.String() != "BAR" {
-				return nil, fmt.Errorf("Wrong Text Value: %s", textField.String())
+			if textField.String() != "FOO" {
+				checks.checkProtoText = false
+			} else {
+				checks.checkProtoText = true
 			}
-			log.Printf("String: %s", textField.String())
 			if timeField.String() != "000" {
-				return nil, fmt.Errorf("Wrong Time Value")
+				checks.checkProtoTime = false
+			} else {
+				checks.checkProtoTime = true
 			}
 
-			res = append(res, true)
 			res = append(res, true)
 			return nil, nil
 		},
@@ -214,17 +216,13 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	origReadyFunc := isReady
 	isReady = func(queueHead *managedwriter.AppendResult) bool {
-		if res[0] {
-			return true
-		} else {
-			return false
-		}
+		return true
 	}
 	defer func() { isReady = origReadyFunc }()
 
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
-		if res[1] {
+		if res[0] {
 			checks.appendQueue++
 			return -1, nil
 		}
@@ -245,7 +243,9 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		dummyRecord := make(map[interface{}]interface{})
 		if loopCount%2 == 0 {
 			loopCount++
+			// Represents "FOO" in bytes as the data for the Text field
 			dummyRecord["Text"] = []byte{70, 79, 79}
+			// Represents "000" in bytes as the data for the Time field
 			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 0, nil, dummyRecord
 		} else {
@@ -254,19 +254,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		}
 	})
 	defer patchRecord.Unpatch()
-
-	origRequestFunc := sendRequest
-	sendRequest = func(ctx context.Context, data [][]byte, config **outputConfig) error {
-		if len(data) > 0 {
-			_, err := (*config).managedStream.AppendRows(ctx, data)
-			if err != nil {
-				return err
-			}
-			*(*config).appendResults = append(*(*config).appendResults, nil)
-		}
-		return nil
-	}
-	defer func() { sendRequest = origRequestFunc }()
 
 	config := configMap[setID]
 	config.messageDescriptor = md
@@ -287,4 +274,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	assert.Equal(t, 1, checks.appendQueue)
 	assert.Equal(t, 2, checks.createDecoder)
 	assert.Equal(t, 4, checks.gotRecord)
+	assert.True(t, checks.checkProtoText)
+	assert.True(t, checks.checkProtoTime)
 }
