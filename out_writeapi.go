@@ -202,32 +202,44 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 	return finval, nil
 }
 
+// this function sends and checks the responses for data through a committed stream with exactly once functionality
+func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig) error {
+	(*config).mutex.Lock()
+	defer (*config).mutex.Unlock()
+
+	appendResult, err := (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
+	if err != nil {
+		return err
+	}
+	//synchronously check the response immediately after appending data with exactly once semantics
+	_, err = appendResult.GetResult(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// this function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
+func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig) error {
+	(*config).mutex.Lock()
+	defer (*config).mutex.Unlock()
+
+	appendResult, err := (*config).managedStream.AppendRows(ctx, data)
+	if err != nil {
+		return err
+	}
+
+	*(*config).appendResults = append(*(*config).appendResults, appendResult)
+	return nil
+}
+
+// this function cases on the exactly/at-least once functionality and sends the data accordingly
 func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
 	if len(data) > 0 {
-		(*config).mutex.Lock()
-		defer (*config).mutex.Unlock()
-		var appendResult *managedwriter.AppendResult
-		var err error
-
 		if (*config).exactlyOnce {
-			appendResult, err = (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
-			if err != nil {
-				return err
-			}
-
-			*(*config).appendResults = append(*(*config).appendResults, appendResult)
-			//synchronously check the response immediately after appending data with exactly once semantics
-			err := checkResponses(ms_ctx, (*config).appendResults, true, &(*config).mutex)
-			if err != nil {
-				return err
-			}
+			return sendRequestExactlyOnce(ctx, data, config)
 		} else {
-			appendResult, err = (*config).managedStream.AppendRows(ctx, data)
-			if err != nil {
-				return err
-			}
-
-			*(*config).appendResults = append(*(*config).appendResults, appendResult)
+			return sendRequestDefault(ctx, data, config)
 		}
 	}
 	return nil
