@@ -83,8 +83,6 @@ type StreamChecks struct {
 	appendRows       int
 	appendQueue      int
 	checkReady       int
-	checkProtoText   bool
-	checkProtoTime   bool
 }
 
 type MockManagedStream struct {
@@ -163,14 +161,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			textField := message.Get(md.Fields().ByJSONName("Text"))
 			timeField := message.Get(md.Fields().ByJSONName("Time"))
 
-			if textField.String() != "FOO" {
-				checks.checkProtoText = false
-				assert.True(t, checks.checkProtoText)
-			}
-			if timeField.String() != "000" {
-				checks.checkProtoTime = false
-				assert.True(t, checks.checkProtoTime)
-			}
+			assert.Equal(t, "FOO", textField.String())
+			assert.Equal(t, "000", timeField.String())
 
 			res = append(res, true)
 			return nil, nil
@@ -272,6 +264,4 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	assert.Equal(t, 1, checks.appendQueue)
 	assert.Equal(t, 2, checks.createDecoder)
 	assert.Equal(t, 4, checks.gotRecord)
-	assert.True(t, checks.checkProtoText)
-	assert.True(t, checks.checkProtoTime)
 }
