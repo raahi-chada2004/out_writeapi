@@ -85,6 +85,7 @@ type StreamChecks struct {
 	checkReady       int
 }
 
+// Interface to be able to mock functions
 type MockManagedStream struct {
 	managedstream  *managedwriter.ManagedStream
 	AppendRowsFunc func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
@@ -143,7 +144,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	// Slice that holds result of AppendRows to check in checkResponses
 	appendResult := []bool{}
-
 	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -208,12 +208,15 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	origReadyFunc := isReady
 	isReady = func(queueHead *managedwriter.AppendResult) bool {
+		// Response is always ready for test
 		return true
 	}
 	defer func() { isReady = origReadyFunc }()
 
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
+		// Checks whether the value is "true" to simulate a successful response
+		// This can return errors for failed responses if we append a "false" in AppendRows
 		if appendResult[0] {
 			checks.getResultsCount++
 			return -1, nil
