@@ -452,6 +452,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		if (currsize + len(buf)) >= config.maxChunkSize {
 			// Appending Rows
 			err := sendRequest(ms_ctx, binaryData, &config)
+			log.Println()
 			if err != nil {
 				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
