@@ -22,6 +22,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
+	"time"
 	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
@@ -35,7 +36,6 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
-import "time"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
