@@ -81,7 +81,7 @@ type StreamChecks struct {
 	createDecoder    int
 	gotRecord        int
 	appendRows       int
-	appendQueue      int
+	getResultsCount  int
 	checkReady       int
 }
 
@@ -141,7 +141,9 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	}
 	defer func() { getClient = originalFunc }()
 
-	res := []bool{}
+	// Slice that holds result of AppendRows to check in checkResponses
+	appendResult := []bool{}
+
 	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -164,7 +166,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			assert.Equal(t, "FOO", textField.String())
 			assert.Equal(t, "000", timeField.String())
 
-			res = append(res, true)
+			appendResult = append(appendResult, true)
 			return nil, nil
 		},
 		FinalizeFunc: func(ctx context.Context, opts ...gax.CallOption) (int64, error) {
@@ -212,8 +214,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
-		if res[0] {
-			checks.appendQueue++
+		if appendResult[0] {
+			checks.getResultsCount++
 			return -1, nil
 		}
 		err := errors.New("Failed to Get Result")
@@ -254,13 +256,12 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 	result = FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
-	print(result)
 
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
 	assert.Equal(t, 2, checks.appendRows)
 	assert.Equal(t, 2, checks.calledGetContext)
-	assert.Equal(t, 2, checks.appendQueue)
+	assert.Equal(t, 2, checks.getResultsCount)
 	assert.Equal(t, 2, checks.createDecoder)
 	assert.Equal(t, 4, checks.gotRecord)
 }
