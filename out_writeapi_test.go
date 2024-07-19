@@ -216,7 +216,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
 		// Checks whether the value is "true" to simulate a successful response
-		// This can return errors for failed responses if we append a "false" in AppendRows
+		// Can simulate errors for failed responses if we append a "false" to appendResult in AppendRows
 		if appendResult[0] {
 			checks.getResultsCount++
 			return -1, nil
