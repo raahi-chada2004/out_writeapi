@@ -79,6 +79,6 @@ The `Max_Chunk_Size` field takes in the number of bytes that the plugin will att
 
 The `Exactly_Once` field takes in a boolean that describes whether exactly-once semantics will be utilized. By default, this field has value false and exactly-once is not used. With exactly-once delivery, response checking will be synchronous (as opposed to asynchronous response checking with at-least once/default semantics).
 
-The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics.
+The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
 For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
