@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"unsafe"
@@ -143,7 +142,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	defer func() { getClient = originalFunc }()
 
 	// Slice that holds result of AppendRows to check in checkResponses
-	appendResult := []bool{}
 	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -166,7 +164,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			assert.Equal(t, "FOO", textField.String())
 			assert.Equal(t, "000", timeField.String())
 
-			appendResult = append(appendResult, true)
 			return nil, nil
 		},
 		FinalizeFunc: func(ctx context.Context, opts ...gax.CallOption) (int64, error) {
@@ -215,14 +212,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
-		// Checks whether the value is "true" to simulate a successful response
-		// Can simulate errors for failed responses if we append a "false" to appendResult in AppendRows
-		if appendResult[0] {
-			checks.getResultsCount++
-			return -1, nil
-		}
-		err := errors.New("Failed to Get Result")
-		return 0, err
+		checks.getResultsCount++
+		return -1, nil
 	}
 	defer func() { pluginGetResult = origResultFunc }()
 
@@ -233,7 +224,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	defer patchDecoder.Unpatch()
 
 	var rowSent int = 0
-	var rowCount int = 2
+	var rowCount int = 5
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
 		checks.gotRecord++
 		dummyRecord := make(map[interface{}]interface{})
@@ -245,6 +236,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 0, nil, dummyRecord
 		}
+		rowSent = 0
 		return 1, nil, nil
 	})
 	defer patchRecord.Unpatch()
@@ -260,11 +252,16 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	result := FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 	result = FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
 
+	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
+	// number without having to manually change it. Each time flush is called, GetRecord is called for the
+	// number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
+	expectGotRecord := (rowCount + 1) * 2
+
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
 	assert.Equal(t, 2, checks.appendRows)
 	assert.Equal(t, 2, checks.calledGetContext)
-	assert.Equal(t, 2, checks.getResultsCount)
+	assert.Equal(t, 1, checks.getResultsCount)
 	assert.Equal(t, 2, checks.createDecoder)
-	assert.Equal(t, 4, checks.gotRecord)
+	assert.Equal(t, expectGotRecord, checks.gotRecord)
 }

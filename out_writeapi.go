@@ -263,7 +263,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	//optional maxchunksize param
 	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
-	var maxChunkSize_init int
+	maxChunkSize_init := 9 * 1024 * 1024
 	if str != "" {
 		maxChunkSize_init, err = strconv.Atoi(str)
 		if err != nil {
@@ -279,8 +279,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	//optional max queue size params
 	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
 	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
-	var queueSize int
-	var queueByteSize int
+	queueSize := 1000
+	queueByteSize := 100 * 1024 * 1024
 	if str1 == "" {
 		queueSize = 1000
 	} else {
