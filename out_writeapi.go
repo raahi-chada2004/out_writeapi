@@ -339,6 +339,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	//optional num synchronous retries parameter
+	//this value is only used when the exactly-once field is configured to true (as it describes synchronous retries)
 	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
 	if err != nil {
 		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
