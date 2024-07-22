@@ -46,7 +46,7 @@ The WriteAPI Output Plugin enables a customer to send data to Google BigQuery wi
     Parsers_File    path/to/jsonparser.conf
     plugins_file    path/to/plugins.conf
 ```
-The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute paths to the files.
+The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute or relative paths to the files.
 
 Here is an example of a `INPUT` section:
 ```
@@ -56,7 +56,7 @@ Here is an example of a `INPUT` section:
     Parser  json
     Tag     logfile1
 ```
-This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute path to the file. 
+This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute or relative path to the file. 
 
 Here is an example of an `OUTPUT` section:
 ```
@@ -70,7 +70,15 @@ Here is an example of an `OUTPUT` section:
     Max_Chunk_Size                     1048576
     Max_Queue_Requests                 100
     Max_Queue_Bytes                    52428800
+    Exactly_Once                       True
+    Num_Synchronous_Retries            4
 ```
 This establishes an output with the name `writeapi` which matches any input with a tag of `logfile*`. The match uses regex, so the input from above would lead to this output. The next three lines describe the destination table in BigQuery. The format relates to how the file should be parsed and the three lines after relate to how you want the stream to send data.
+
+The `Max_Chunk_Size` field takes in the number of bytes that the plugin will attempt to chunk data into before appending into the BigQuery Table. Fluent-Bit supports around a maximum of 2 MB of data within a single flush and we exercise a hard maximum of 9 MB (as BigQuery cannot handle appending data larger than this size). The `Max_Queue_Requests` and `Max_Queue_Bytes` fields describe the maximum number of requests/bytes of outstanding asynchrous responses that can be queued. When the first limit is reached, data appending will be blocked until enough responses are ready and the number of outstanding requests/bytes decreases. 
+
+The `Exactly_Once` field takes in a boolean that describes whether exactly-once semantics will be utilized. By default, this field has value false and exactly-once is not used. With exactly-once delivery, response checking will be synchronous (as opposed to asynchronous response checking with at-least once/default semantics).
+
+The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
 For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
