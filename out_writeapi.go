@@ -22,6 +22,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
+	"time"
 	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
@@ -46,6 +47,7 @@ type outputConfig struct {
 	mutex             sync.Mutex
 	exactlyOnce       bool
 	offsetCounter     int64
+	numRetries        int
 }
 
 var (
@@ -59,6 +61,7 @@ const (
 	queueRequestDefault = 1000
 	queueByteDefault    = 100 * 1024 * 1024
 	exactlyOnceDefault  = false
+	numRetriesDefault   = 4
 )
 
 // This function handles getting data on the schema of the table data is being written to.
@@ -148,10 +151,13 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 // This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) error {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) error {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
+		if exactlyOnceConf {
+			return errors.New("Asynchronous response queue has non-zero size when exactly-once is configured")
+		}
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			_, err := queueHead.GetResult(curr_ctx)
@@ -219,6 +225,25 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 	return nil
 }
 
+func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
+	retryer := newStatelessRetryer((*config).numRetries)
+	attempt := 0
+	for {
+		err := sendRequestExactlyOnce(ctx, data, config)
+		if err == nil {
+			break
+		}
+		backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
+		if !shouldRetry {
+			return err
+		}
+		attempt++
+		time.Sleep(backoffPeriod)
+
+	}
+	return nil
+}
+
 // this function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
 func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig) error {
 	(*config).mutex.Lock()
@@ -237,7 +262,7 @@ func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfi
 func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
 	if len(data) > 0 {
 		if (*config).exactlyOnce {
-			return sendRequestExactlyOnce(ctx, data, config)
+			return sendRequestRetries(ctx, data, config)
 		} else {
 			return sendRequestDefault(ctx, data, config)
 		}
@@ -311,6 +336,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
+	}
+
+	//optional num synchronous retries parameter
+	//this value is only used when the exactly-once field is configured to true (as it describes synchronous retries)
+	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
+	if err != nil {
+		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
 	}
 
 	//optional maxchunksize param
@@ -387,6 +419,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
 		exactlyOnce:       exactlyOnceVal,
+		offsetCounter:     0,
+		numRetries:        numRetriesVal,
 	}
 
 	configMap[configID] = &config
@@ -418,7 +452,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
+	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex, config.exactlyOnce)
 	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, responseErr)
 		return output.FLB_ERROR
@@ -500,7 +534,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex)
+	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex, config.exactlyOnce)
 	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx: %s", id, responseErr)
 		return output.FLB_ERROR
