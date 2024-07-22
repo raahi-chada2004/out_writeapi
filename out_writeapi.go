@@ -149,6 +149,7 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // and wait for the next response from WriteAPI
 // This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
 func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) error {
+	log.Printf("Check responses length: %d", len(*currQueuePointer))
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
@@ -223,6 +224,9 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
+
+	log.Printf("Queue length: %d", len(*(*config).appendResults))
+	log.Printf("Queue address: %p", *(*config).appendResults)
 
 	appendResult, err := (*config).managedStream.AppendRows(ctx, data)
 	if err != nil {
@@ -302,6 +306,8 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
+	log.Printf("Init called")
+
 	//set projectID, datasetID, and tableID from config file params
 	projectID := output.FLBPluginConfigKey(plugin, "ProjectID")
 	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
@@ -408,6 +414,8 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
+	log.Printf("Flush Called")
+
 	// Get Fluentbit Context
 	id := output.FLBPluginGetContext(ctx).(int)
 	// Locate stream in map
@@ -452,7 +460,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		if (currsize + len(buf)) >= config.maxChunkSize {
 			// Appending Rows
 			err := sendRequest(ms_ctx, binaryData, &config)
-			log.Println()
+			log.Println("In chunking")
 			if err != nil {
 				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
@@ -473,6 +481,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 	// Appending Rows
 	err := sendRequest(ms_ctx, binaryData, &config)
+	log.Printf("Not in chunking")
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
