@@ -75,10 +75,6 @@ extern "C" {
 #endif
 
 extern GoInt FLBPluginRegister(void* def);
-
-// (fluentbit will call this)
-// plugin (context) pointer to fluentbit context (state/ c code)
-//
 extern GoInt FLBPluginInit(void* plugin);
 extern GoInt FLBPluginFlush(void* data, int length, char* tag);
 extern GoInt FLBPluginFlushCtx(void* ctx, void* data, int length, char* tag);

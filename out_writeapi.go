@@ -1,13 +1,28 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package main
 
 import (
 	"C"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
 	"sync"
+	_ "time"
 	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
@@ -30,20 +45,28 @@ type outputConfig struct {
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
 	mutex             sync.Mutex
+	exactlyOnce       bool
+	offsetCounter     int64
+	numRetries        int
 }
 
 var (
-	err       error
 	ms_ctx    = context.Background()
 	configMap = make(map[int]*outputConfig)
 	configID  = 0
 )
 
-// This function handles getting data on the schema of the table data is being written to. It uses GetWriteStream as well as adapt functions to get the relevant descriptors. The inputs for this function are the context, managed writer client,
-// projectID, datasetID, and tableID. getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto(which sends the table schema to the stream when created with
-// NewManagedStream as shown in line 54 and 63 of source.go).
+const (
+	chunkSizeLimit      = 9 * 1024 * 1024
+	queueRequestDefault = 1000
+	queueByteDefault    = 100 * 1024 * 1024
+	exactlyOnceDefault  = false
+	numRetriesDefault   = 4
+)
 
-func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+// This function handles getting data on the schema of the table data is being written to.
+// getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
+func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -54,41 +77,39 @@ func getDescriptors(curr_ctx context.Context, managed_writer_client ManagedWrite
 	}
 
 	//call getwritestream to get data on the table
-	table_data, err2 := managed_writer_client.GetWriteStream(curr_ctx, &req)
-	if err2 != nil {
-		log.Fatalf("getWriteStream command failed: %v", err2)
+	table_data, err := mw_client.GetWriteStream(curr_ctx, &req)
+	if err != nil {
+		return nil, nil, err
 	}
 	//get the schema from table data
 	table_schema := table_data.GetTableSchema()
 	//storage schema ->proto descriptor
 	descriptor, err := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 	if err != nil {
-		log.Fatalf("adapt.StorageSchemaToDescriptor: %v", err)
+		return nil, nil, err
 	}
 	//proto descriptor -> messageDescriptor
 	messageDescriptor, ok := descriptor.(protoreflect.MessageDescriptor)
 	if !ok {
-		log.Fatalf("adapted descriptor is not a message descriptor")
+		return nil, nil, errors.New("Message descriptor could not be created from table's proto descriptor")
 	}
 
 	//messageDescriptor -> descriptor proto
 	dp, err := adapt.NormalizeDescriptor(messageDescriptor)
 	if err != nil {
-		log.Fatalf("NormalizeDescriptor: %v", err)
+		return nil, nil, err
 	}
 
-	return messageDescriptor, dp
+	return messageDescriptor, dp, nil
 }
 
-// This function handles the data transformation from JSON to binary for a single json row. In practice, this function would be utilized within a loop to transform all of the json data. The inputs are the message descriptor
-//(which was returned in getDescriptors) as well as the relevant jsonRow (of type map[string]interface{} - which is the output of unmarshalling the json data). The outputs are the corresponding binary data as well as any error that occurs.
-//Various json, protojson, and proto marshalling/unmarshalling functions are utilized to transform the data. The message descriptor is used when creating an empty new proto message (which the data is placed into).
-
-func json_to_binary(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
+// This function handles the data transformation from JSON to binary for a single json row.
+// The outputs of this function are the corresponding binary data as well as any error that occurs.
+func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
 	//JSON map -> JSON byte
 	row, err := json.Marshal(jsonRow)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal json map: %w", err)
+		return nil, err
 	}
 	//create empty message
 	message := dynamicpb.NewMessage(message_descriptor)
@@ -96,20 +117,20 @@ func json_to_binary(message_descriptor protoreflect.MessageDescriptor, jsonRow m
 	// First, json->proto message
 	err = protojson.Unmarshal(row, message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to Unmarshal json message: %w", err)
+		return nil, err
 	}
 
 	// Then, proto message -> bytes.
 	b, err := proto.Marshal(message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal proto bytes: %w ", err)
+		return nil, err
 	}
 
 	return b, nil
 }
 
 // from https://github.com/majst01/fluent-bit-go-redis-output.git
-// function is used to transform pluent-bit record to a JSON map
+// function is used to transform fluent-bit record to a JSON map
 func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	m := make(map[string]interface{})
 	for k, v := range mapInterface {
@@ -142,8 +163,14 @@ var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Conte
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool) int {
+// This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) int {
+	(*currMutex).Lock()
+	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
+		if exactlyOnceConf {
+			return 1
+		}
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := pluginGetResult(queueHead, curr_ctx)
@@ -171,6 +198,102 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 	return 0
 }
 
+// this function gets the value of various configuration fields and returns an error if the field could not be parsed
+func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval T) (T, error) {
+	currstr := output.FLBPluginConfigKey(plugin, key)
+	finval := defaultval
+	if currstr != "" {
+		switch any(defaultval).(type) {
+		case int:
+			intval, err := strconv.Atoi(currstr)
+			if err != nil {
+				return defaultval, err
+			} else {
+				finval = any(intval).(T)
+			}
+		case bool:
+			boolval, err := strconv.ParseBool(currstr)
+			if err != nil {
+				return defaultval, err
+			} else {
+				finval = any(boolval).(T)
+			}
+		}
+
+	}
+	return finval, nil
+}
+
+// this function sends and checks the responses for data through a committed stream with exactly once functionality
+func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig) error {
+	(*config).mutex.Lock()
+	defer (*config).mutex.Unlock()
+
+	appendResult, err := (*config).managedStream.AppendRows(ctx, data, managedwriter.WithOffset((*config).offsetCounter))
+	if err != nil {
+		return err
+	}
+	//synchronously check the response immediately after appending data with exactly once semantics
+	_, err = appendResult.GetResult(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
+	// retryer := newStatelessRetryer((*config).numRetries)
+	// attempt := 0
+	// for {
+	// 	err := sendRequestExactlyOnce(ctx, data, config)
+	// 	if err == nil {
+	// 		break
+	// 	}
+	// 	backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
+	// 	if !shouldRetry {
+	// 		return err
+	// 	}
+	// 	attempt++
+	// 	time.Sleep(backoffPeriod)
+
+	// }
+	return nil
+}
+
+// this function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
+func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig) error {
+	(*config).mutex.Lock()
+	defer (*config).mutex.Unlock()
+
+	appendResult, err := (*config).managedStream.AppendRows(ctx, data)
+	if err != nil {
+		return err
+	}
+
+	*(*config).appendResults = append(*(*config).appendResults, appendResult)
+	log.Println("Done")
+	return nil
+}
+
+// this function cases on the exactly/at-least once functionality and sends the data accordingly
+func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
+	if len(data) > 0 {
+		if (*config).exactlyOnce {
+			return sendRequestRetries(ctx, data, config)
+		} else {
+			return sendRequestDefault(ctx, data, config)
+		}
+	}
+	return nil
+}
+
+// this is a test-only method that provides the instance count for configMap
+func getInstanceCount() int {
+	return len(configMap)
+}
+
+// this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
+// with its actual methods.
 type ManagedWriterClient interface {
 	NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
 	GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
@@ -233,27 +356,11 @@ var getFLBPluginContext = func(ctx unsafe.Pointer) int {
 	return output.FLBPluginGetContext(ctx).(int)
 }
 
-func sendRequest(ctx context.Context, data [][]byte, config **outputConfig) error {
-	if len(data) > 0 {
-		(*config).mutex.Lock()
-		defer (*config).mutex.Unlock()
-		appendResult, err := (*config).managedStream.AppendRows(ctx, data)
-		if err != nil {
-			return err
-		}
-		*(*config).appendResults = append(*(*config).appendResults, appendResult)
-	}
-	return nil
-}
-
 //export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
 	return output.FLBPluginRegister(def, "writeapi", "Sends data to BigQuery through WriteAPI")
 }
 
-// (fluentbit will call this)
-// plugin (context) pointer to fluentbit context (state/ c code)
-//
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
 	//set projectID, datasetID, and tableID from config file params
@@ -261,74 +368,82 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
+	//set exactly-once bool from config file param
+	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
+	if err != nil {
+		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
+	}
+
+	//optional num synchronous retries parameter
+	//this value is only used when the exactly-once field is configured to true (as it describes synchronous retries)
+	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
+	if err != nil {
+		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
+	}
+
 	//optional maxchunksize param
-	str := output.FLBPluginConfigKey(plugin, "Max_Chunk_Size")
-	maxChunkSize_init := 9 * 1024 * 1024
-	if str != "" {
-		maxChunkSize_init, err = strconv.Atoi(str)
-		if err != nil {
-			log.Printf("Invalid Max Chunk Size, defaulting to 9 MB:%v", err)
-			maxChunkSize_init = 9 * 1024 * 1024
-		}
-		if maxChunkSize_init > 9*1024*1024 {
-			log.Println("A single call to AppendRows cannot exceed 9 MB.")
-			maxChunkSize_init = 9 * 1024 * 1024
-		}
+	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", chunkSizeLimit)
+	if err != nil {
+		log.Printf("Invalid Max_Chunk_Size parameter in configuration file: %s", err)
+		return output.FLB_ERROR
+	}
+	if maxChunkSize_init > chunkSizeLimit {
+		log.Printf("Max_Chunk_Size was set to: %d, but a single call to AppendRows cannot exceed 9 MB. Defaulting to 9 MB", maxChunkSize_init)
+		maxChunkSize_init = chunkSizeLimit
 	}
 
 	//optional max queue size params
-	str1 := output.FLBPluginConfigKey(plugin, "Max_Queue_Requests")
-	str2 := output.FLBPluginConfigKey(plugin, "Max_Queue_Bytes")
-	queueSize := 1000
-	queueByteSize := 100 * 1024 * 1024
-	if str1 == "" {
-		queueSize = 1000
-	} else {
-		queueSize, err = strconv.Atoi(str1)
-		if err != nil {
-			log.Printf("Invalid Max Queue Requests, defaulting to 1000:%v", err)
-			queueSize = 1000
-		}
+	queueSize, err := getConfigField(plugin, "Max_Queue_Requests", queueRequestDefault)
+	if err != nil {
+		log.Printf("Invalid Max_Queue_Requests parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
-	if str2 == "" {
-		queueByteSize = (100 * 1024 * 1024)
-	} else {
-		queueByteSize, err = strconv.Atoi(str2)
-		if err != nil {
-			log.Printf("Invalid Max Queue MB, defaulting to 100 MB:%v", err)
-			queueByteSize = (100 * 1024 * 1024)
-		}
+	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
+	if err != nil {
+		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
-
 	//create new client
 	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Creating a new managed BigQuery Storage write client scoped to: %s failed in FLBPluginInit: %s", projectID, err)
 		return output.FLB_ERROR
 	}
-
-	//use getDescriptors to get the message descriptor, and descriptor proto
-	md, descriptor := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
 
 	// streamname
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
+	//use getDescriptors to get the message descriptor, and descriptor proto
+	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
+	if err != nil {
+		log.Printf("Getting message descriptor and descriptor proto for table: %s failed in FLBPluginInit: %s", tableReference, err)
+		return output.FLB_ERROR
+	}
+
+	//set the stream type based on exactly once parameter
+	var currStreamType managedwriter.StreamType
+	var enableRetries bool
+	if exactlyOnceVal {
+		currStreamType = managedwriter.CommittedStream
+	} else {
+		currStreamType = managedwriter.DefaultStream
+		enableRetries = true
+	}
+
 	// Create stream using NewManagedStream
 	managedStream, err := getWriter(client, ms_ctx, projectID,
-		managedwriter.WithType(managedwriter.DefaultStream),
+		managedwriter.WithType(currStreamType),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor(descriptor),
-		managedwriter.EnableWriteRetries(true),
+		managedwriter.EnableWriteRetries(enableRetries),
 		managedwriter.WithMaxInflightBytes(queueByteSize),
 		managedwriter.WithMaxInflightRequests(queueSize),
 	)
 	if err != nil {
-		log.Fatal("NewManagedStream: ", err)
+		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
 	}
-
-	log.Printf("max byte size: %d, max requests: %d", queueByteSize, queueSize)
 
 	var res_temp []*managedwriter.AppendResult
 
@@ -339,6 +454,9 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
+		exactlyOnce:       exactlyOnceVal,
+		offsetCounter:     0,
+		numRetries:        numRetriesVal,
 	}
 
 	configMap[configID] = &config
@@ -367,13 +485,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Look up through reference
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
-		return output.FLB_OK
+		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginFlushCtx", id)
+		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, false)
-	if responseErr == 1 {
-		log.Fatal("error in checking responses noticed in flush")
+	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex, config.exactlyOnce)
+	if responseErr != 0 {
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx", id)
 		return output.FLB_ERROR
 	}
 
@@ -381,6 +499,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
 	var currsize int
+	//keeps track of the number of rows previously sent
+	var rowCounter int64
+
 	// Iterate Records
 	for {
 		// Extract Record
@@ -389,18 +510,17 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			break
 		}
 
-		row := parseMap(record)
+		rowJSONMap := parseMap(record)
 
 		//serialize data
-
-		//transform each row of data into binary using the json_to_binary function and the message descriptor from the getDescriptors function
-		buf, err := json_to_binary(config.messageDescriptor, row)
+		//transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
+		buf, err := jsonToBinary(config.messageDescriptor, rowJSONMap)
 		if err != nil {
-			log.Fatal("converting from json to binary failed: ", err)
+			log.Printf("Transforming records from JSON to binary data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 
-		if (currsize + len(buf)) > config.maxChunkSize {
+		if (currsize + len(buf)) >= config.maxChunkSize {
 			// Appending Rows
 			err := sendRequest(ms_ctx, binaryData, &config)
 			if err != nil {
@@ -408,20 +528,27 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				return output.FLB_ERROR
 			}
 
+			config.offsetCounter += rowCounter
+			rowCounter = 0
+
 			binaryData = nil
 			currsize = 0
 
 		}
 		binaryData = append(binaryData, buf)
-		currsize += len(buf)
+		//include the protobuf overhead to the currsize variable
+		currsize += (len(buf) + 2)
+		rowCounter++
 
 	}
-
+	// Appending Rows
 	err := sendRequest(ms_ctx, binaryData, &config)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
 	}
+
+	config.offsetCounter += rowCounter
 
 	return output.FLB_OK
 }
@@ -436,31 +563,35 @@ func FLBPluginExit() int {
 func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Get context
 	id := output.FLBPluginGetContext(ctx).(int)
-	log.Printf("[multiinstance] Flush called for id: %d", id)
 
 	// Locate stream in map
 	config, ok := configMap[id]
 	if !ok {
-		log.Printf("Skipping flush because config is not found for tag: %d.", id)
+		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginExitCtx", id)
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, true)
-	if responseErr == 1 {
-		log.Fatal("error in checking responses noticed in flush")
+	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex, config.exactlyOnce)
+	if responseErr != 0 {
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx", id)
 		return output.FLB_ERROR
 	}
 
 	if config.managedStream != nil {
-		if err = config.managedStream.Close(); err != nil {
-			log.Printf("Couldn't close managed stream:%v", err)
+		if config.exactlyOnce {
+			if _, err := config.managedStream.Finalize(ms_ctx); err != nil {
+				log.Printf("Finalizing managed stream for output instance with id: %d failed in FLBPluginExit: %s", id, err)
+			}
+		}
+		if err := config.managedStream.Close(); err != nil {
+			log.Printf("Closing managed stream for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 	}
 
 	if config.client != nil {
-		if err = config.client.Close(); err != nil {
-			log.Printf("Couldn't close managed writer client:%v", err)
+		if err := config.client.Close(); err != nil {
+			log.Printf("Closing managed writer client for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
 	}
