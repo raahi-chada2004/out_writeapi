@@ -384,6 +384,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
 
 	//optional num synchronous retries parameter
@@ -391,6 +392,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
 	if err != nil {
 		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
 
 	//optional maxchunksize param
