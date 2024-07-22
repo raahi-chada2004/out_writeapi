@@ -3,6 +3,8 @@
 This README includes all the necessary information to use the WriteAPI output pluging. This plugin allows you to stream records into Google Cloud BigQuery. This implementation only supports the following:
 - JSON file formats
 
+Currently, the plugin will allow for the stream of any JSON formatted data. Data that doesn't fit the schema of the table in BigQuery is not written into the table. If a row of bad data is sent through the plugin (e.g. wrong data type), some other rows may not appear in the table but rows after may still appear in BigQuery.
+
 ## Creating a BigQuery Dataset and Table
 Fluentbit does not create the dataset and table for your data, so you must create these ahead of time. 
 - [Creating and using datasets](https://cloud.google.com/bigquery/docs/datasets)
