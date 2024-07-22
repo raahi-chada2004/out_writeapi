@@ -25,7 +25,7 @@ func writeToFirstLog() {
 	}
 	defer file.Close()
 
-	currtime := time.NewTicker(time.Millisecond)
+	currtime := time.NewTicker(time.Second)
 	defer currtime.Stop()
 
 	datatime := time.NewTimer(60 * time.Second)
@@ -81,7 +81,7 @@ func writeToSecondLog() {
 	}
 	defer file.Close()
 
-	currtime := time.NewTicker(time.Millisecond)
+	currtime := time.NewTicker(time.Second)
 	defer currtime.Stop()
 
 	datatime := time.NewTimer(60 * time.Second)
