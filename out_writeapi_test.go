@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"testing"
 	"unsafe"
 
@@ -106,6 +107,190 @@ func (m *MockManagedWriterClient) BatchCommitWriteStreams(ctx context.Context, r
 
 func (m *MockManagedWriterClient) CreateWriteStream(ctx context.Context, req *storagepb.CreateWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
 	return m.client.CreateWriteStream(ctx, req, opts...)
+}
+
+// TestFLBPluginInit tests the FLBPluginInit function
+func TestFLBPluginInit(t *testing.T) {
+	var currChecks OptionChecks
+	mockClient := &MockManagedWriterClient{
+		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+			currChecks.calledNewManagedStream++
+			if len(opts) == 6 {
+				currChecks.numInputs = true
+			}
+			return nil, nil
+
+		},
+		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+			currChecks.calledGetWriteStream++
+			return &storagepb.WriteStream{
+				Name: "mockstream",
+				TableSchema: &storagepb.TableSchema{
+					Fields: []*storagepb.TableFieldSchema{
+						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+					},
+				},
+			}, nil
+		},
+	}
+
+	originalFunc := getClient
+	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+		currChecks.calledGetClient++
+		return mockClient, nil
+	}
+	defer func() { getClient = originalFunc }()
+
+	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		log.Println("Mock out.FLBPluginConfigKey called")
+		switch key {
+		case "ProjectID":
+			currChecks.configProjectID = true
+			return "DummyProjectId"
+		case "DatasetID":
+			currChecks.configDatasetID = true
+			return "DummyDatasetId"
+		case "TableID":
+			currChecks.configTableID = true
+			return "DummyTableId"
+		case "Max_Chunk_Size":
+			currChecks.configMaxChunkSize = true
+			return "0"
+		case "Max_Queue_Requests":
+			currChecks.configMaxQueueRequests = true
+			return "0"
+		case "Max_Queue_Bytes":
+			currChecks.configMaxQueueSize = true
+			return "0"
+		case "Exactly_Once":
+			currChecks.configExactlyOnce = true
+			return "False"
+		default:
+			return ""
+		}
+	})
+	defer patch1.Unpatch()
+
+	patch2 := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
+		currChecks.calledSetContext++
+	})
+	defer patch2.Unpatch()
+
+	plugin := unsafe.Pointer(nil)
+	initsize := getInstanceCount()
+	result := FLBPluginInit(plugin)
+	finsize := getInstanceCount()
+	if (finsize - 1) == initsize {
+		currChecks.mapSizeIncremented = true
+	}
+	assert.Equal(t, output.FLB_OK, result)
+	assert.True(t, currChecks.configProjectID)
+	assert.True(t, currChecks.configDatasetID)
+	assert.True(t, currChecks.configTableID)
+	assert.True(t, currChecks.configMaxChunkSize)
+	assert.True(t, currChecks.configMaxQueueRequests)
+	assert.True(t, currChecks.configMaxQueueSize)
+	assert.True(t, currChecks.configExactlyOnce)
+	assert.Equal(t, 1, currChecks.calledGetClient)
+	assert.Equal(t, 1, currChecks.calledGetWriteStream)
+	assert.Equal(t, 1, currChecks.calledNewManagedStream)
+	assert.Equal(t, 1, currChecks.calledSetContext)
+	assert.True(t, currChecks.numInputs)
+	assert.True(t, currChecks.mapSizeIncremented)
+
+}
+
+// this test checks that all relevant functions are called in init when exactly once is set to true
+func TestFLBPluginInitExactlyOnce(t *testing.T) {
+	var currChecks OptionChecks
+	mockClient := &MockManagedWriterClient{
+		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
+			currChecks.calledNewManagedStream++
+			if len(opts) == 6 {
+				currChecks.numInputs = true
+			}
+			return nil, nil
+
+		},
+		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
+			currChecks.calledGetWriteStream++
+			return &storagepb.WriteStream{
+				Name: "mockstream",
+				TableSchema: &storagepb.TableSchema{
+					Fields: []*storagepb.TableFieldSchema{
+						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+					},
+				},
+			}, nil
+		},
+	}
+
+	originalFunc := getClient
+	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
+		currChecks.calledGetClient++
+		return mockClient, nil
+	}
+	defer func() { getClient = originalFunc }()
+
+	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
+		log.Println("Mock out.FLBPluginConfigKey called")
+		switch key {
+		case "ProjectID":
+			currChecks.configProjectID = true
+			return "DummyProjectId"
+		case "DatasetID":
+			currChecks.configDatasetID = true
+			return "DummyDatasetId"
+		case "TableID":
+			currChecks.configTableID = true
+			return "DummyTableId"
+		case "Max_Chunk_Size":
+			currChecks.configMaxChunkSize = true
+			return "0"
+		case "Max_Queue_Requests":
+			currChecks.configMaxQueueRequests = true
+			return "0"
+		case "Max_Queue_Bytes":
+			currChecks.configMaxQueueSize = true
+			return "0"
+		case "Exactly_Once":
+			currChecks.configExactlyOnce = true
+			return "True"
+		default:
+			return ""
+		}
+	})
+	defer patch1.Unpatch()
+
+	patch2 := monkey.Patch(output.FLBPluginSetContext, func(plugin unsafe.Pointer, ctx interface{}) {
+		currChecks.calledSetContext++
+	})
+	defer patch2.Unpatch()
+
+	plugin := unsafe.Pointer(nil)
+	initsize := getInstanceCount()
+	result := FLBPluginInit(plugin)
+	finsize := getInstanceCount()
+	if (finsize - 1) == initsize {
+		currChecks.mapSizeIncremented = true
+	}
+	assert.Equal(t, output.FLB_OK, result)
+	assert.True(t, currChecks.configProjectID)
+	assert.True(t, currChecks.configDatasetID)
+	assert.True(t, currChecks.configTableID)
+	assert.True(t, currChecks.configMaxChunkSize)
+	assert.True(t, currChecks.configMaxQueueRequests)
+	assert.True(t, currChecks.configMaxQueueSize)
+	assert.True(t, currChecks.configExactlyOnce)
+	assert.Equal(t, 1, currChecks.calledGetClient)
+	assert.Equal(t, 1, currChecks.calledGetWriteStream)
+	assert.Equal(t, 1, currChecks.calledNewManagedStream)
+	assert.Equal(t, 1, currChecks.calledSetContext)
+	assert.True(t, currChecks.numInputs)
+	assert.True(t, currChecks.mapSizeIncremented)
+
 }
 
 type StreamChecks struct {
