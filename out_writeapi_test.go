@@ -120,6 +120,14 @@ func (m *MockManagedStream) Close() error {
 func TestFLBPluginFlushCtx(t *testing.T) {
 	checks := new(StreamChecks)
 	var setID int
+
+	testTableSchema := &storagepb.TableSchema{
+		Fields: []*storagepb.TableFieldSchema{
+			{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+			{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
+		},
+	}
+
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
 			return nil, nil
@@ -127,13 +135,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		},
 		GetWriteStreamFunc: func(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error) {
 			return &storagepb.WriteStream{
-				Name: "mockstream",
-				TableSchema: &storagepb.TableSchema{
-					Fields: []*storagepb.TableFieldSchema{
-						{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
-						{Name: "Text", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
-					},
-				},
+				Name:        "mockstream",
+				TableSchema: testTableSchema,
 			}, nil
 		},
 	}
@@ -144,14 +147,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	}
 	defer func() { getClient = originalFunc }()
 
-	testGetDescrip := func(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
-		curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
-		req := storagepb.GetWriteStreamRequest{
-			Name: curr_stream,
-			View: storagepb.WriteStreamView_FULL,
-		}
-		table_data, _ := managed_writer_client.GetWriteStream(curr_ctx, &req)
-		table_schema := table_data.TableSchema
+	testGetDescrip := func() (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+		table_schema := testTableSchema
 		descriptor, _ := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 		messageDescriptor, _ := descriptor.(protoreflect.MessageDescriptor)
 		dp, _ := adapt.NormalizeDescriptor(messageDescriptor)
@@ -159,7 +156,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		return messageDescriptor, dp
 	}
 
-	md, _ := testGetDescrip(ms_ctx, mockClient, "dummy", "dummy", "dummy")
+	md, _ := testGetDescrip()
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
 			checks.appendRows++
@@ -257,9 +254,6 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 		return 1, nil, nil
 	})
 	defer patchRecord.Unpatch()
-
-	config := configMap[setID]
-	config.messageDescriptor = md
 
 	// Converts id (int) to type unsafe.Pointer to be used as the ctx
 	uintptrValue := uintptr(setID)
