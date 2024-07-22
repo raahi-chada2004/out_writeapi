@@ -40,7 +40,7 @@ import (
 // Struct for each stream - one stream per output
 type outputConfig struct {
 	messageDescriptor protoreflect.MessageDescriptor
-	managedStream     *managedwriter.ManagedStream
+	managedStream     MWManagedStream
 	client            ManagedWriterClient
 	maxChunkSize      int
 	appendResults     *[]*managedwriter.AppendResult
@@ -147,39 +147,55 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	return m
 }
 
+var isReady = func(result *managedwriter.AppendResult) bool {
+	select {
+	case <-result.Ready():
+		return true
+	default:
+		return false
+	}
+}
+
+var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Context) (int64, error) {
+	return result.GetResult(ctx)
+}
+
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 // This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) error {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) int {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
 		if exactlyOnceConf {
-			return errors.New("Asynchronous response queue has non-zero size when exactly-once is configured")
+			return 1
 		}
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
-			_, err := queueHead.GetResult(curr_ctx)
+			recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				return err
+				log.Fatal("error in checking responses")
+				return 1
 			}
+			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
-			select {
-			case <-queueHead.Ready():
-				_, err := queueHead.GetResult(curr_ctx)
+			if isReady(queueHead) {
+				recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
-					return err
+					log.Fatal("error in checking responses")
+					return 1
 				}
-			default:
-				return nil
+				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
+			} else {
+				return 0
 			}
 		}
 
 	}
-	return nil
+	return 0
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
@@ -239,7 +255,6 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		}
 		attempt++
 		time.Sleep(backoffPeriod)
-
 	}
 	return nil
 }
@@ -255,6 +270,7 @@ func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfi
 	}
 
 	*(*config).appendResults = append(*(*config).appendResults, appendResult)
+	log.Println("Done")
 	return nil
 }
 
@@ -318,6 +334,25 @@ var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient
 		return nil, err
 	}
 	return &realManagedWriterClient{currClient: client}, nil
+}
+
+type MWManagedStream interface {
+	AppendRows(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error)
+	Close() error
+	Finalize(ctx context.Context, opts ...gax.CallOption) (int64, error)
+	FlushRows(ctx context.Context, offset int64, opts ...gax.CallOption) (int64, error)
+	StreamName() string
+}
+
+// To inject a mock interface, I override getWriter and getContext
+var getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
+	return client.NewManagedStream(ctx, opts...)
+}
+
+// This function acts as a wrapper for the GetContext function so that we may override it to
+// mock it whenever needed
+var getFLBPluginContext = func(ctx unsafe.Pointer) int {
+	return output.FLBPluginGetContext(ctx).(int)
 }
 
 //export FLBPluginRegister
@@ -395,7 +430,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	// Create stream using NewManagedStream
-	managedStream, err := client.NewManagedStream(ms_ctx,
+	managedStream, err := getWriter(client, ms_ctx, projectID,
 		managedwriter.WithType(currStreamType),
 		managedwriter.WithDestinationTable(tableReference),
 		//use the descriptor proto when creating the new managed stream
@@ -442,8 +477,9 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	// Get Fluentbit Context
-	id := output.FLBPluginGetContext(ctx).(int)
+	id := getFLBPluginContext(ctx)
+	log.Printf("[multiinstance] Flush called for id: %d", id)
+
 	// Locate stream in map
 	// Look up through reference
 	config, ok := configMap[id]
@@ -453,8 +489,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 
 	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex, config.exactlyOnce)
-	if responseErr != nil {
-		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, responseErr)
+	if responseErr != 0 {
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx", id)
 		return output.FLB_ERROR
 	}
 
@@ -535,8 +571,8 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 
 	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex, config.exactlyOnce)
-	if responseErr != nil {
-		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx: %s", id, responseErr)
+	if responseErr != 0 {
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx", id)
 		return output.FLB_ERROR
 	}
 
