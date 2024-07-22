@@ -22,7 +22,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
-	_ "time"
+	"time"
 	"unsafe"
 
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
@@ -242,21 +242,20 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 }
 
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
-	// retryer := newStatelessRetryer((*config).numRetries)
-	// attempt := 0
-	// for {
-	// 	err := sendRequestExactlyOnce(ctx, data, config)
-	// 	if err == nil {
-	// 		break
-	// 	}
-	// 	backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
-	// 	if !shouldRetry {
-	// 		return err
-	// 	}
-	// 	attempt++
-	// 	time.Sleep(backoffPeriod)
-
-	// }
+	retryer := newStatelessRetryer((*config).numRetries)
+	attempt := 0
+	for {
+		err := sendRequestExactlyOnce(ctx, data, config)
+		if err == nil {
+			break
+		}
+		backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
+		if !shouldRetry {
+			return err
+		}
+		attempt++
+		time.Sleep(backoffPeriod)
+	}
 	return nil
 }
 
