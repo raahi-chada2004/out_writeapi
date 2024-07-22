@@ -39,21 +39,21 @@ import "math"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
-	messageDescriptor protoreflect.MessageDescriptor
-	managedStream     *managedwriter.ManagedStream
-	client            ManagedWriterClient
-	maxChunkSize      int
-	appendResults     *[]*managedwriter.AppendResult
-	mutex             sync.Mutex
-	exactlyOnce       bool
-	offsetCounter     int64
+	messageDescriptor                   protoreflect.MessageDescriptor
+	managedStream                       *managedwriter.ManagedStream
+	client                              ManagedWriterClient
+	maxChunkSize                        int
+	appendResults                       *[]*managedwriter.AppendResult
+	mutex                               sync.Mutex
+	exactlyOnce                         bool
+	offsetCounter                       int64
+	pendingRequestCountScaleupThreshold int
 }
 
 var (
-	ms_ctx              = context.Background()
-	configMap           = make(map[int]*outputConfig)
-	configID            = 0
-	queueRequestScaling = 0
+	ms_ctx    = context.Background()
+	configMap = make(map[int]*outputConfig)
+	configID  = 0
 )
 
 const (
@@ -152,7 +152,6 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // and wait for the next response from WriteAPI
 // This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
 func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) (int, error) {
-	log.Printf("Check responses length: %d", len(*currQueuePointer))
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
@@ -335,7 +334,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 	// Multiply floats, floor it, then convert it to integer for ease of use in Flush
-	queueRequestScaling = int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
+	queueRequestScaling := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
 	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
 	if err != nil {
 		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
@@ -387,12 +386,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	// Instantiates stream
 	config := outputConfig{
-		messageDescriptor: md,
-		managedStream:     managedStream,
-		client:            client,
-		maxChunkSize:      maxChunkSize_init,
-		appendResults:     &res_temp,
-		exactlyOnce:       exactlyOnceVal,
+		messageDescriptor:                   md,
+		managedStream:                       managedStream,
+		client:                              client,
+		maxChunkSize:                        maxChunkSize_init,
+		appendResults:                       &res_temp,
+		exactlyOnce:                         exactlyOnceVal,
+		pendingRequestCountScaleupThreshold: queueRequestScaling,
 	}
 
 	configMap[configID] = &config
@@ -414,8 +414,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	log.Printf("Flush Called")
-
 	// Get Fluentbit Context
 	id := output.FLBPluginGetContext(ctx).(int)
 	// Locate stream in map
@@ -426,12 +424,11 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	queueLen, responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
+	_, responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex)
 	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, responseErr)
 		return output.FLB_ERROR
 	}
-	log.Printf("Queue len after: %d", queueLen)
 
 	// Commenting to say that I believe this would be the ideal place to build a NewManagedStream
 
