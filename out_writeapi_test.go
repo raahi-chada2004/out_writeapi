@@ -9,10 +9,13 @@ import (
 	"bou.ke/monkey"
 	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	"cloud.google.com/go/bigquery/storage/managedwriter"
+	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/googleapis/gax-go/v2"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -141,8 +144,22 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	}
 	defer func() { getClient = originalFunc }()
 
-	// Slice that holds result of AppendRows to check in checkResponses
-	md, _ := getDescriptors(ms_ctx, mockClient, "dummy", "dummy", "dummy")
+	testGetDescrip := func(curr_ctx context.Context, managed_writer_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
+		curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
+		req := storagepb.GetWriteStreamRequest{
+			Name: curr_stream,
+			View: storagepb.WriteStreamView_FULL,
+		}
+		table_data, _ := managed_writer_client.GetWriteStream(curr_ctx, &req)
+		table_schema := table_data.TableSchema
+		descriptor, _ := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
+		messageDescriptor, _ := descriptor.(protoreflect.MessageDescriptor)
+		dp, _ := adapt.NormalizeDescriptor(messageDescriptor)
+
+		return messageDescriptor, dp
+	}
+
+	md, _ := testGetDescrip(ms_ctx, mockClient, "dummy", "dummy", "dummy")
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
 			checks.appendRows++
@@ -193,8 +210,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	})
 	defer patchSetContext.Unpatch()
 
-	plugin := unsafe.Pointer(nil)
-	initRes := FLBPluginInit(plugin)
+	initRes := FLBPluginInit(nil)
 
 	orgFunc := getFLBPluginContext
 	getFLBPluginContext = func(ctx unsafe.Pointer) int {
@@ -236,6 +252,7 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 			dummyRecord["Time"] = []byte{48, 48, 48}
 			return 0, nil, dummyRecord
 		}
+		// Reset to prepare for next call to Flush
 		rowSent = 0
 		return 1, nil, nil
 	})
@@ -249,8 +266,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	pointerValue := unsafe.Pointer(uintptrValue)
 
 	// Calls FlushCtx with this ID
-	result := FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
-	result = FLBPluginFlushCtx(pointerValue, plugin, 1, nil)
+	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
+	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
 	// number without having to manually change it. Each time flush is called, GetRecord is called for the
