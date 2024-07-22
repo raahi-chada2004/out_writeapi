@@ -30,6 +30,7 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/apierror"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -40,6 +41,12 @@ import (
 // Struct for each stream - one stream per output
 type outputConfig struct {
 	messageDescriptor protoreflect.MessageDescriptor
+	streamType        managedwriter.StreamType
+	tableRef          string
+	schemaDesc        *descriptorpb.DescriptorProto
+	retryBool         bool
+	queueBytes        int
+	queueRequests     int
 	managedStream     *managedwriter.ManagedStream
 	client            ManagedWriterClient
 	maxChunkSize      int
@@ -208,6 +215,32 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 	return finval, nil
 }
 
+// this function creates a new managed stream based on the config struct fields
+func buildStream(ctx context.Context, config **outputConfig) error {
+	currManagedStream, err := (*config).client.NewManagedStream(ctx,
+		managedwriter.WithType((*config).streamType),
+		managedwriter.WithDestinationTable((*config).tableRef),
+		//use the descriptor proto when creating the new managed stream
+		managedwriter.WithSchemaDescriptor((*config).schemaDesc),
+		managedwriter.EnableWriteRetries((*config).retryBool),
+		managedwriter.WithMaxInflightBytes((*config).queueBytes),
+		managedwriter.WithMaxInflightRequests((*config).queueRequests),
+	)
+	(*config).managedStream = currManagedStream
+	return err
+}
+
+// this function returns whether or not the response indicates an invalid (garbage-collected) stream
+func rebuildPredicate(err error) bool {
+	if apiErr, ok := apierror.FromError(err); ok {
+		storageErr := &storagepb.StorageError{}
+		if e := apiErr.Details().ExtractProtoMessage(storageErr); e != nil {
+			return storageErr.GetCode() == storagepb.StorageError_INVALID_STREAM_TYPE
+		}
+	}
+	return false
+}
+
 // this function sends and checks the responses for data through a committed stream with exactly once functionality
 func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig) error {
 	(*config).mutex.Lock()
@@ -225,19 +258,42 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 	return nil
 }
 
+// this function enables synchronous retries and rebuilding a valid stream based on the server response
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
+	//increment describes whether to increase the attempt count
+	var increment int
+	//backoffPeriod describes the time to wait between retry attempts
+	var backoffPeriod time.Duration
+	//shouldRetry indicates whether the error is retryable
+	var shouldRetry bool
 	for {
 		err := sendRequestExactlyOnce(ctx, data, config)
 		if err == nil {
 			break
 		}
-		backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
-		if !shouldRetry {
-			return err
+		//unsuccesful data append
+		if rebuildPredicate(err) {
+			(*config).managedStream.Finalize(ctx)
+			(*config).managedStream.Close()
+			err := buildStream(ctx, config)
+			if err != nil {
+				return err
+			}
+
+			//retry sending data without incrementing number of attempts or waiting between attempts
+			increment, backoffPeriod = 0, (0 * time.Second)
+		} else {
+			backoffPeriod, shouldRetry = retryer.Retry(err, attempt)
+			if !shouldRetry {
+				return err
+			}
+			//retry sending data after incrementing attempt count and wait for designated amount of time
+			increment = 1
+
 		}
-		attempt++
+		attempt += increment
 		time.Sleep(backoffPeriod)
 
 	}
@@ -394,27 +450,17 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		enableRetries = true
 	}
 
-	// Create stream using NewManagedStream
-	managedStream, err := client.NewManagedStream(ms_ctx,
-		managedwriter.WithType(currStreamType),
-		managedwriter.WithDestinationTable(tableReference),
-		//use the descriptor proto when creating the new managed stream
-		managedwriter.WithSchemaDescriptor(descriptor),
-		managedwriter.EnableWriteRetries(enableRetries),
-		managedwriter.WithMaxInflightBytes(queueByteSize),
-		managedwriter.WithMaxInflightRequests(queueSize),
-	)
-	if err != nil {
-		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
-		return output.FLB_ERROR
-	}
-
 	var res_temp []*managedwriter.AppendResult
 
 	// Instantiates stream
 	config := outputConfig{
 		messageDescriptor: md,
-		managedStream:     managedStream,
+		streamType:        currStreamType,
+		tableRef:          tableReference,
+		schemaDesc:        descriptor,
+		retryBool:         enableRetries,
+		queueBytes:        queueByteSize,
+		queueRequests:     queueSize,
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
@@ -424,6 +470,14 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 
 	configMap[configID] = &config
+
+	// Create stream using NewManagedStream
+	configPointer := &config
+	err = buildStream(ms_ctx, &configPointer)
+	if err != nil {
+		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
+		return output.FLB_ERROR
+	}
 
 	// Creating FLB context for each output, enables multiinstancing
 	config.mutex.Lock()
