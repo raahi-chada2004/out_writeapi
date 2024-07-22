@@ -44,9 +44,9 @@ type outputConfig struct {
 	streamType        managedwriter.StreamType
 	tableRef          string
 	schemaDesc        *descriptorpb.DescriptorProto
-	retryBool         bool
-	queueBytes        int
-	queueRequests     int
+	enableRetry       bool
+	maxQueueBytes     int
+	maxQueueRequests  int
 	managedStream     *managedwriter.ManagedStream
 	client            ManagedWriterClient
 	maxChunkSize      int
@@ -222,11 +222,13 @@ func buildStream(ctx context.Context, config **outputConfig) error {
 		managedwriter.WithDestinationTable((*config).tableRef),
 		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor((*config).schemaDesc),
-		managedwriter.EnableWriteRetries((*config).retryBool),
-		managedwriter.WithMaxInflightBytes((*config).queueBytes),
-		managedwriter.WithMaxInflightRequests((*config).queueRequests),
+		managedwriter.EnableWriteRetries((*config).enableRetry),
+		managedwriter.WithMaxInflightBytes((*config).maxQueueBytes),
+		managedwriter.WithMaxInflightRequests((*config).maxQueueRequests),
 	)
-	(*config).managedStream = currManagedStream
+	if err == nil {
+		(*config).managedStream = currManagedStream
+	}
 	return err
 }
 
@@ -262,12 +264,6 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
-	//increment describes whether to increase the attempt count
-	var increment int
-	//backoffPeriod describes the time to wait between retry attempts
-	var backoffPeriod time.Duration
-	//shouldRetry indicates whether the error is retryable
-	var shouldRetry bool
 	for {
 		err := sendRequestExactlyOnce(ctx, data, config)
 		if err == nil {
@@ -281,20 +277,16 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 			if err != nil {
 				return err
 			}
-
 			//retry sending data without incrementing number of attempts or waiting between attempts
-			increment, backoffPeriod = 0, (0 * time.Second)
 		} else {
-			backoffPeriod, shouldRetry = retryer.Retry(err, attempt)
+			backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
 			if !shouldRetry {
 				return err
 			}
 			//retry sending data after incrementing attempt count and wait for designated amount of time
-			increment = 1
-
+			attempt++
+			time.Sleep(backoffPeriod)
 		}
-		attempt += increment
-		time.Sleep(backoffPeriod)
 
 	}
 	return nil
@@ -458,9 +450,9 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		streamType:        currStreamType,
 		tableRef:          tableReference,
 		schemaDesc:        descriptor,
-		retryBool:         enableRetries,
-		queueBytes:        queueByteSize,
-		queueRequests:     queueSize,
+		enableRetry:       enableRetries,
+		maxQueueBytes:     queueByteSize,
+		maxQueueRequests:  queueSize,
 		client:            client,
 		maxChunkSize:      maxChunkSize_init,
 		appendResults:     &res_temp,
@@ -469,8 +461,6 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		numRetries:        numRetriesVal,
 	}
 
-	configMap[configID] = &config
-
 	// Create stream using NewManagedStream
 	configPointer := &config
 	err = buildStream(ms_ctx, &configPointer)
@@ -478,6 +468,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
 	}
+
+	configMap[configID] = &config
 
 	// Creating FLB context for each output, enables multiinstancing
 	config.mutex.Lock()
