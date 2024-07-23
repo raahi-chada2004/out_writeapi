@@ -61,7 +61,7 @@ const (
 	queueRequestDefault        = 1000
 	queueByteDefault           = 100 * 1024 * 1024
 	exactlyOnceDefault         = false
-	queueRequestScalingPercent = 0.1
+	queueRequestScalingPercent = 0.8
 )
 
 // This function handles getting data on the schema of the table data is being written to.
