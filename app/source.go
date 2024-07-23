@@ -14,37 +14,25 @@ type log_entry struct {
 }
 
 func main() {
-	file, err := os.OpenFile("logfile2.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	file, err := os.OpenFile("logfile.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	logger := log.New(file, "", 0)
 	if err != nil {
 		fmt.Println("Error opening file:", err)
 		os.Exit(1)
 	}
-	i := 0
-	for {
-		if i < 100 {
-			curr := log_entry{
-				Time: time.Now().Format(time.RFC3339),
-				Text: "Hello World!",
-			}
-			entry, err := json.Marshal(curr)
-			if err != nil {
-				fmt.Println("Error marshaling JSON:", err)
-				continue
-			}
 
-			logger.Println(string(entry))
-		} else {
-			curr := "Bad data entry"
-			entry, err := json.Marshal(curr)
-			if err != nil {
-				fmt.Println("Error marshaling JSON:", err)
-				continue
-			}
-			i = 0
-			logger.Println(string(entry))
+	for {
+		curr := log_entry{
+			Time: time.Now().Format(time.RFC3339),
+			Text: "Hello World!",
 		}
-		i++
+		entry, err := json.Marshal(curr)
+		if err != nil {
+			fmt.Println("Error marshaling JSON:", err)
+			continue
+		}
+
+		logger.Println(string(entry))
 		time.Sleep(time.Second)
 	}
 }
