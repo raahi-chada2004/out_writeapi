@@ -75,7 +75,7 @@ func TestPipeline(t *testing.T) {
 	}
 
 	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "false"); err != nil {
+	if err := createConfigFile(1, projectID, datasetID, tableID, "false"); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestPipeline(t *testing.T) {
 
 	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
-	if err := generateData(numRowsData); err != nil {
+	if err := generateData(numRowsData, false); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -186,7 +186,7 @@ func TestExactlyOnce(t *testing.T) {
 	}
 
 	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "true"); err != nil {
+	if err := createConfigFile(1, projectID, datasetID, tableID, "true"); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestExactlyOnce(t *testing.T) {
 
 	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
-	if err := generateData(numRowsData); err != nil {
+	if err := generateData(numRowsData, false); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -275,6 +275,7 @@ const configTemplate = `
 [SERVICE]
     Daemon          off
     Log_Level       error
+	Flush 			{{.CurrFlushTime}}
     Parsers_File    ./jsonparser.conf
     plugins_file    ./plugins.conf
 [INPUT]
@@ -293,6 +294,7 @@ const configTemplate = `
 
 // struct for dynamically updating config file
 type Config struct {
+	CurrFlushTime   int
 	CurrLogfilePath string
 	CurrProjectName string
 	CurrDatasetName string
@@ -301,9 +303,10 @@ type Config struct {
 }
 
 // function creates configuration file with the input as the TableId field
-func createConfigFile(currProjectID string, currDatasetID string, currTableID string, currExactlyOnceVal string) error {
+func createConfigFile(flushTime int, currProjectID string, currDatasetID string, currTableID string, currExactlyOnceVal string) error {
 	//struct with the TableId
 	config := Config{
+		CurrFlushTime:   flushTime,
 		CurrLogfilePath: logFilePath,
 		CurrProjectName: currProjectID,
 		CurrDatasetName: currDatasetID,
@@ -335,7 +338,7 @@ type log_entry struct {
 }
 
 // data generation function
-func generateData(numRows int) error {
+func generateData(numRows int, sendBadRow bool) error {
 	//open file
 	file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	logger := log.New(file, "", 0)
@@ -349,6 +352,9 @@ func generateData(numRows int) error {
 			Message: "hello world",
 		}
 		entry, err := json.Marshal(curr)
+		if sendBadRow && i == numRows/2 {
+			entry, err = json.Marshal("Bad data entry")
+		}
 		if err != nil {
 			return err
 		}
