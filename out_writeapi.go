@@ -30,6 +30,7 @@ import (
 	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
 	"github.com/fluent/fluent-bit-go/output"
 	"github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/apierror"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -41,6 +42,13 @@ import "math"
 // Struct for each stream - one stream per output
 type outputConfig struct {
 	messageDescriptor     protoreflect.MessageDescriptor
+	streamType            managedwriter.StreamType
+	currProjectID         string
+	tableRef              string
+	schemaDesc            *descriptorpb.DescriptorProto
+	enableRetry           bool
+	maxQueueBytes         int
+	maxQueueRequests      int
 	managedStream         MWManagedStream
 	client                ManagedWriterClient
 	maxChunkSize          int
@@ -224,6 +232,35 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 	return finval, nil
 }
 
+// this function creates a new managed stream based on the config struct fields
+func buildStream(ctx context.Context, config **outputConfig) error {
+	currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
+		managedwriter.WithType((*config).streamType),
+		managedwriter.WithDestinationTable((*config).tableRef),
+		//use the descriptor proto when creating the new managed stream
+		managedwriter.WithSchemaDescriptor((*config).schemaDesc),
+		managedwriter.EnableWriteRetries((*config).enableRetry),
+		managedwriter.WithMaxInflightBytes((*config).maxQueueBytes),
+		managedwriter.WithMaxInflightRequests((*config).maxQueueRequests),
+	)
+
+	if err == nil {
+		(*config).managedStream = currManagedStream
+	}
+	return err
+}
+
+// this function returns whether or not the response indicates an invalid (garbage-collected) stream
+func rebuildPredicate(err error) bool {
+	if apiErr, ok := apierror.FromError(err); ok {
+		storageErr := &storagepb.StorageError{}
+		if e := apiErr.Details().ExtractProtoMessage(storageErr); e != nil {
+			return storageErr.GetCode() == storagepb.StorageError_INVALID_STREAM_TYPE
+		}
+	}
+	return false
+}
+
 // this function sends and checks the responses for data through a committed stream with exactly once functionality
 func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig) error {
 	(*config).mutex.Lock()
@@ -241,6 +278,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 	return nil
 }
 
+// this function enables synchronous retries and rebuilding a valid stream based on the server response
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
@@ -249,12 +287,25 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		if err == nil {
 			break
 		}
-		backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
-		if !shouldRetry {
-			return err
+		//unsuccesful data append
+		if rebuildPredicate(err) {
+			(*config).managedStream.Finalize(ctx)
+			(*config).managedStream.Close()
+			err := buildStream(ctx, config)
+			if err != nil {
+				return err
+			}
+			//retry sending data without incrementing number of attempts or waiting between attempts
+		} else {
+			backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
+			if !shouldRetry {
+				return err
+			}
+			//retry sending data after incrementing attempt count and wait for designated amount of time
+			attempt++
+			time.Sleep(backoffPeriod)
 		}
-		attempt++
-		time.Sleep(backoffPeriod)
+
 	}
 	return nil
 }
@@ -371,6 +422,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
 
 	//optional num synchronous retries parameter
@@ -378,6 +430,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
 	if err != nil {
 		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
+		return output.FLB_ERROR
 	}
 
 	//optional maxchunksize param
@@ -434,34 +487,33 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		enableRetries = true
 	}
 
-	// Create stream using NewManagedStream
-	managedStream, err := getWriter(client, ms_ctx, projectID,
-		managedwriter.WithType(currStreamType),
-		managedwriter.WithDestinationTable(tableReference),
-		//use the descriptor proto when creating the new managed stream
-		managedwriter.WithSchemaDescriptor(descriptor),
-		managedwriter.EnableWriteRetries(enableRetries),
-		managedwriter.WithMaxInflightBytes(queueByteSize),
-		managedwriter.WithMaxInflightRequests(queueSize),
-	)
-	if err != nil {
-		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
-		return output.FLB_ERROR
-	}
-
 	var res_temp []*managedwriter.AppendResult
 
 	// Instantiates stream
 	config := outputConfig{
 		messageDescriptor:     md,
-		managedStream:         managedStream,
+		streamType:            currStreamType,
+		tableRef:              tableReference,
+		currProjectID:         projectID,
+		schemaDesc:            descriptor,
+		enableRetry:           enableRetries,
+		maxQueueBytes:         queueByteSize,
+		maxQueueRequests:      queueSize,
 		client:                client,
 		maxChunkSize:          maxChunkSize_init,
 		appendResults:         &res_temp,
 		exactlyOnce:           exactlyOnceVal,
-		requestCountThreshold: requestCountThreshold,
 		offsetCounter:         0,
 		numRetries:            numRetriesVal,
+		requestCountThreshold: requestCountThreshold,
+	}
+
+	// Create stream using NewManagedStream
+	configPointer := &config
+	err = buildStream(ms_ctx, &configPointer)
+	if err != nil {
+		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
+		return output.FLB_ERROR
 	}
 
 	configMap[configID] = &config
