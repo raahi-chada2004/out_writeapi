@@ -37,25 +37,27 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
+import "math"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
-	messageDescriptor protoreflect.MessageDescriptor
-	streamType        managedwriter.StreamType
-	currProjectID     string
-	tableRef          string
-	schemaDesc        *descriptorpb.DescriptorProto
-	enableRetry       bool
-	maxQueueBytes     int
-	maxQueueRequests  int
-	managedStream     MWManagedStream
-	client            ManagedWriterClient
-	maxChunkSize      int
-	appendResults     *[]*managedwriter.AppendResult
-	mutex             sync.Mutex
-	exactlyOnce       bool
-	offsetCounter     int64
-	numRetries        int
+	messageDescriptor     protoreflect.MessageDescriptor
+	streamType            managedwriter.StreamType
+	currProjectID         string
+	tableRef              string
+	schemaDesc            *descriptorpb.DescriptorProto
+	enableRetry           bool
+	maxQueueBytes         int
+	maxQueueRequests      int
+	managedStream         MWManagedStream
+	client                ManagedWriterClient
+	maxChunkSize          int
+	appendResults         *[]*managedwriter.AppendResult
+	mutex                 sync.Mutex
+	exactlyOnce           bool
+	offsetCounter         int64
+	requestCountThreshold int
+	numRetries            int
 }
 
 var (
@@ -65,11 +67,12 @@ var (
 )
 
 const (
-	chunkSizeLimit      = 9 * 1024 * 1024
-	queueRequestDefault = 1000
-	queueByteDefault    = 100 * 1024 * 1024
-	exactlyOnceDefault  = false
-	numRetriesDefault   = 4
+	chunkSizeLimit             = 9 * 1024 * 1024
+	queueRequestDefault        = 1000
+	queueByteDefault           = 100 * 1024 * 1024
+	exactlyOnceDefault         = false
+	queueRequestScalingPercent = 0.8
+	numRetriesDefault          = 4
 )
 
 // This function handles getting data on the schema of the table data is being written to.
@@ -171,39 +174,36 @@ var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Conte
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-// This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) int {
+// This function returns an int which is the length of the queue after being checked or -1 if there was some error.
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) (int, error) {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
 		if exactlyOnceConf {
-			return 1
+			return -1, errors.New("Exactly once")
 		}
 		queueHead := (*currQueuePointer)[0]
 		if waitForResponse {
 			recvOffset, err := pluginGetResult(queueHead, curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				log.Fatal("error in checking responses")
-				return 1
+				return -1, err
 			}
 			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
 			if isReady(queueHead) {
-				recvOffset, err := pluginGetResult(queueHead, curr_ctx)
+				_, err := pluginGetResult(queueHead, curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
-					log.Fatal("error in checking responses")
-					return 1
+					return -1, err
 				}
-				log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 			} else {
-				return 0
+				return len(*currQueuePointer), nil
 			}
 		}
 
 	}
-	return 0
+	return len(*currQueuePointer), nil
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
@@ -450,6 +450,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		log.Printf("Invalid Max_Queue_Requests parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
+	// Multiply floats, floor it, then convert it to integer for ease of use in Flush
+	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
+	if requestCountThreshold < 10 {
+		requestCountThreshold = 10
+	}
 	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
 	if err != nil {
 		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
@@ -486,20 +491,21 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	// Instantiates stream
 	config := outputConfig{
-		messageDescriptor: md,
-		streamType:        currStreamType,
-		tableRef:          tableReference,
-		currProjectID:     projectID,
-		schemaDesc:        descriptor,
-		enableRetry:       enableRetries,
-		maxQueueBytes:     queueByteSize,
-		maxQueueRequests:  queueSize,
-		client:            client,
-		maxChunkSize:      maxChunkSize_init,
-		appendResults:     &res_temp,
-		exactlyOnce:       exactlyOnceVal,
-		offsetCounter:     0,
-		numRetries:        numRetriesVal,
+		messageDescriptor:     md,
+		streamType:            currStreamType,
+		tableRef:              tableReference,
+		currProjectID:         projectID,
+		schemaDesc:            descriptor,
+		enableRetry:           enableRetries,
+		maxQueueBytes:         queueByteSize,
+		maxQueueRequests:      queueSize,
+		client:                client,
+		maxChunkSize:          maxChunkSize_init,
+		appendResults:         &res_temp,
+		exactlyOnce:           exactlyOnceVal,
+		offsetCounter:         0,
+		numRetries:            numRetriesVal,
+		requestCountThreshold: requestCountThreshold,
 	}
 
 	// Create stream using NewManagedStream
@@ -540,11 +546,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex, config.exactlyOnce)
-	if responseErr != 0 {
+	_, responseErr := checkResponses(ms_ctx, config.appendResults, false, &config.mutex, config.exactlyOnce)
+	if responseErr != nil {
 		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx", id)
 		return output.FLB_ERROR
 	}
+
+	// TODO: Build a NewManagedStream if request count is above threshold
 
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
@@ -622,9 +630,9 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex, config.exactlyOnce)
-	if responseErr != 0 {
-		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx", id)
+	_, responseErr := checkResponses(ms_ctx, config.appendResults, true, &config.mutex, config.exactlyOnce)
+	if responseErr != nil {
+		log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginExitCtx: %s", id, responseErr)
 		return output.FLB_ERROR
 	}
 
