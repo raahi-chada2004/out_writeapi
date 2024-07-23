@@ -71,11 +71,14 @@ Here is an example of an `OUTPUT` section:
     Max_Queue_Requests                 100
     Max_Queue_Bytes                    52428800
     Exactly_Once                       True
+    Num_Synchronous_Retries            4
 ```
 This establishes an output with the name `writeapi` which matches any input with a tag of `logfile*`. The match uses regex, so the input from above would lead to this output. The next three lines describe the destination table in BigQuery. The format relates to how the file should be parsed and the three lines after relate to how you want the stream to send data.
 
 The `Max_Chunk_Size` field takes in the number of bytes that the plugin will attempt to chunk data into before appending into the BigQuery Table. Fluent-Bit supports around a maximum of 2 MB of data within a single flush and we exercise a hard maximum of 9 MB (as BigQuery cannot handle appending data larger than this size). The `Max_Queue_Requests` and `Max_Queue_Bytes` fields describe the maximum number of requests/bytes of outstanding asynchrous responses that can be queued. When the first limit is reached, data appending will be blocked until enough responses are ready and the number of outstanding requests/bytes decreases. 
 
 The `Exactly_Once` field takes in a boolean that describes whether exactly-once semantics will be utilized. By default, this field has value false and exactly-once is not used. With exactly-once delivery, response checking will be synchronous (as opposed to asynchronous response checking with at-least once/default semantics).
+
+The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
 For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
