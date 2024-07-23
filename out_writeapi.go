@@ -39,15 +39,15 @@ import "math"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
-	messageDescriptor                   protoreflect.MessageDescriptor
-	managedStream                       *managedwriter.ManagedStream
-	client                              ManagedWriterClient
-	maxChunkSize                        int
-	appendResults                       *[]*managedwriter.AppendResult
-	mutex                               sync.Mutex
-	exactlyOnce                         bool
-	offsetCounter                       int64
-	pendingRequestCountScaleupThreshold int
+	messageDescriptor     protoreflect.MessageDescriptor
+	managedStream         *managedwriter.ManagedStream
+	client                ManagedWriterClient
+	maxChunkSize          int
+	appendResults         *[]*managedwriter.AppendResult
+	mutex                 sync.Mutex
+	exactlyOnce           bool
+	offsetCounter         int64
+	requestCountThreshold int
 }
 
 var (
@@ -150,7 +150,7 @@ func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 // this function is used for asynchronous WriteAPI response checking
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
-// This function returns an error which is nil if the reponses were checked successfully and populated any were unsuccesful
+// This function returns an int which is the length of the queue after being checked or -1 if there was some error.
 func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex) (int, error) {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
@@ -160,7 +160,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 			_, err := queueHead.GetResult(curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				return 1, err
+				return -1, err
 			}
 		} else {
 			select {
@@ -168,7 +168,7 @@ func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter
 				_, err := queueHead.GetResult(curr_ctx)
 				*currQueuePointer = (*currQueuePointer)[1:]
 				if err != nil {
-					return 1, err
+					return -1, err
 				}
 			default:
 				return len(*currQueuePointer), nil
@@ -334,7 +334,10 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 	// Multiply floats, floor it, then convert it to integer for ease of use in Flush
-	queueRequestScaling := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
+	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
+	if requestCountThreshold < 10 {
+		requestCountThreshold = 10
+	}
 	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
 	if err != nil {
 		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
@@ -386,13 +389,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	// Instantiates stream
 	config := outputConfig{
-		messageDescriptor:                   md,
-		managedStream:                       managedStream,
-		client:                              client,
-		maxChunkSize:                        maxChunkSize_init,
-		appendResults:                       &res_temp,
-		exactlyOnce:                         exactlyOnceVal,
-		pendingRequestCountScaleupThreshold: queueRequestScaling,
+		messageDescriptor:     md,
+		managedStream:         managedStream,
+		client:                client,
+		maxChunkSize:          maxChunkSize_init,
+		appendResults:         &res_temp,
+		exactlyOnce:           exactlyOnceVal,
+		requestCountThreshold: requestCountThreshold,
 	}
 
 	configMap[configID] = &config
@@ -430,7 +433,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	// Commenting to say that I believe this would be the ideal place to build a NewManagedStream
+	// TODO: Build a NewManagedStream if request count is above threshold
 
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))

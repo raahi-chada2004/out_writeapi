@@ -7,6 +7,7 @@ import (
 	_ "math/rand"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -73,7 +74,12 @@ func writeToLog(logfile_path string) {
 }
 
 func main() {
-	for i := 1; i < 4; i++ {
+	numFiles, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		fmt.Printf("Please provide a valid integer for the number of files")
+		return
+	}
+	for i := 0; i < numFiles; i++ {
 		logPath := fmt.Sprintf("logfile%d.log", i)
 		go writeToLog(logPath)
 	}
