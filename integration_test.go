@@ -574,6 +574,7 @@ func generateData(numRows int, sleepTime time.Duration, sendBadRow bool) error {
 			Message: "hello world",
 		}
 		entry, err := json.Marshal(curr)
+		//comparing counter to mod 5 in order to send 2 bad rows of data
 		if sendBadRow && ((i % 5) == 0) {
 			entry, err = json.Marshal("Bad data entry")
 		}
