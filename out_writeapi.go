@@ -646,22 +646,20 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 	streamSlice := *config.managedStreamSlice
 
-	streamIndex := 0
-
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
 		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
-	}
 
-	if streamSlice[streamIndex].managedstream != nil {
-		if config.exactlyOnce {
-			if _, err := streamSlice[streamIndex].managedstream.Finalize(ms_ctx); err != nil {
-				log.Printf("Finalizing managed stream for output instance with id: %d failed in FLBPluginExit: %s", id, err)
+		if streamSlice[i].managedstream != nil {
+			if config.exactlyOnce {
+				if _, err := streamSlice[i].managedstream.Finalize(ms_ctx); err != nil {
+					log.Printf("Finalizing managed stream for output instance with id %d and stream index %d failed in FLBPluginExit: %s", id, i, err)
+				}
 			}
-		}
-		if err := streamSlice[streamIndex].managedstream.Close(); err != nil {
-			log.Printf("Closing managed stream for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
-			return output.FLB_ERROR
+			if err := streamSlice[i].managedstream.Close(); err != nil {
+				log.Printf("Closing managed stream for output instance with id %d and stream index %d failed in FLBPluginExitCtx: %s", id, i, err)
+				return output.FLB_ERROR
+			}
 		}
 	}
 
