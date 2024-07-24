@@ -640,9 +640,9 @@ func TestFLBPluginFlushCtxExactlyOnce(t *testing.T) {
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 	//expect the offset to equal the number of successful rows previously sent (with no server-side errors)
-	assert.Equal(t, int64(rowCount), configMap[setID].offsetCounter)
+	assert.Equal(t, int64(rowCount), getOffset(configMap[setID]))
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
-	assert.Equal(t, int64(2*rowCount), configMap[setID].offsetCounter)
+	assert.Equal(t, int64(2*rowCount), getOffset(configMap[setID]))
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
 	// number without having to manually change it. Each time flush is called, GetRecord is called for the
@@ -818,10 +818,10 @@ func TestFLBPluginFlushCtxErrorHandling(t *testing.T) {
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 	//expect the offset not to increase due to mocked server-side error
-	assert.Equal(t, int64(0), configMap[setID].offsetCounter)
+	assert.Equal(t, int64(0), getOffset(configMap[setID]))
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 	//expect the offset to increase since no error was retured from pluginGetResult
-	assert.Equal(t, int64(rowCount), configMap[setID].offsetCounter)
+	assert.Equal(t, int64(rowCount), getOffset(configMap[setID]))
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
 	// number without having to manually change it. Each time flush is called, GetRecord is called for the
