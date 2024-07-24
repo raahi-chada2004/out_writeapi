@@ -576,7 +576,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	for i := 0; i < sliceLen; i++ {
 		_, responseErr := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce)
 		if responseErr != nil {
-			log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx", id)
+			log.Printf("Checking append responses for output instance with id %d and stream number %d failed in FLBPluginFlushCtx", id, i)
 			return output.FLB_ERROR
 		}
 	}
@@ -611,14 +611,12 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		if (currsize + len(buf)) >= config.maxChunkSize {
 			streamIndex := getStreamIndex()
 			// Appending Rows
-			// TODO: Change for desired stream, defaulting to 0 for now
 			err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 			if err != nil {
 				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
 			}
 
-			// TODO: Change for desired stream, defaulting to 0 for now
 			streamSlice[streamIndex].offsetCounter += rowCounter
 			rowCounter = 0
 
@@ -633,7 +631,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	}
 	// Appending Rows
-	// TODO: Change for desired stream, defaulting to 0 for now
 	streamIndex := getStreamIndex()
 	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 	if err != nil {
@@ -641,7 +638,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 
-	// TODO: Change for desired stream, defaulting to 0 for now
 	streamSlice[streamIndex].offsetCounter += rowCounter
 
 	return output.FLB_OK
@@ -666,14 +662,13 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 	streamSlice := *config.managedStreamSlice
 
-	// TODO: Change for desired stream, defaulting to 0 for now
 	streamIndex := 0
 
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
 		_, responseErr := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce)
 		if responseErr != nil {
-			log.Printf("Checking append responses for output instance with id: %d failed in FLBPluginFlushCtx", id)
+			log.Printf("Checking append responses for output instance with id %d and stream number %d failed in FLBPluginFlushCtx", id, i)
 			return output.FLB_ERROR
 		}
 	}
