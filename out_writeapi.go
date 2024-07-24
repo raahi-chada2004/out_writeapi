@@ -501,13 +501,14 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	var res_temp []*managedwriter.AppendResult
 	streamSlice := []*streamConfig{}
 
+	// Creates struct for stream and appends to slice
 	initStream := streamConfig{
 		offsetCounter: 0,
 		appendResults: &res_temp,
 	}
 	streamSlice = append(streamSlice, &initStream)
 
-	// Instantiates stream
+	// Instantiates output instance
 	config := outputConfig{
 		messageDescriptor:     md,
 		streamType:            currStreamType,
@@ -562,8 +563,10 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginFlushCtx", id)
 		return output.FLB_ERROR
 	}
+	// Holds stream slice for ease of use
 	streamSlice := *config.managedStreamSlice
 
+	// checks responses for each stream using a loop
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
 		_, responseErr := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce)
