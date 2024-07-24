@@ -34,7 +34,6 @@ const (
 	logFilePath    = "./" + logFileName
 	configFilePath = "./fluent-bit.conf"
 	numRows        = 10
-	numGoodRows    = 8
 )
 
 // integration test validates the end-to-end fluentbit and bigquery pipeline
@@ -261,6 +260,7 @@ func TestExactlyOnce(t *testing.T) {
 
 // this test validates that if a single row that cannot be transformed to binary is sent (with default semantics), the rest of the batch will not be dropped
 func TestErrorHandlingDefault(t *testing.T) {
+	const numGoodRows = 8
 
 	ctx := context.Background()
 
@@ -372,6 +372,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 
 // this test validates that if a single row that cannot be transformed to binary is sent (with exactly-once semantics), the rest of the batch will not be dropped
 func TestErrorHandlingExactlyOnce(t *testing.T) {
+	const numGoodRows = 8
 
 	ctx := context.Background()
 
