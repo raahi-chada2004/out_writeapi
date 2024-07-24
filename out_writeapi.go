@@ -263,7 +263,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 		return err
 	}
 	//synchronously check the response immediately after appending data with exactly once semantics
-	_, err = appendResult.GetResult(ctx)
+	_, err = pluginGetResult(appendResult, ctx)
 	if err != nil {
 		return err
 	}
