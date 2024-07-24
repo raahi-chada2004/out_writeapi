@@ -252,8 +252,8 @@ func buildStream(ctx context.Context, config **outputConfig) error {
 	streamSlice := *(*config).managedStreamSlice
 
 	if err == nil {
-		ind := len(streamSlice) - 1
-		(streamSlice)[ind].managedstream = currManagedStream
+		streamIndex := len(streamSlice) - 1
+		(streamSlice)[streamIndex].managedstream = currManagedStream
 	}
 	return err
 }
@@ -270,11 +270,11 @@ func rebuildPredicate(err error) bool {
 }
 
 // this function sends and checks the responses for data through a committed stream with exactly once functionality
-func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig, ind int) error {
+func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
 
-	currStream := (*(*config).managedStreamSlice)[ind]
+	currStream := (*(*config).managedStreamSlice)[streamIndex]
 
 	appendResult, err := currStream.managedstream.AppendRows(ctx, data, managedwriter.WithOffset(currStream.offsetCounter))
 	if err != nil {
@@ -289,12 +289,12 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 }
 
 // this function enables synchronous retries and rebuilding a valid stream based on the server response
-func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig, ind int) error {
+func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
-	currStream := (*(*config).managedStreamSlice)[ind]
+	currStream := (*(*config).managedStreamSlice)[streamIndex]
 	for {
-		err := sendRequestExactlyOnce(ctx, data, config, ind)
+		err := sendRequestExactlyOnce(ctx, data, config, streamIndex)
 		if err == nil {
 			break
 		}
@@ -322,10 +322,10 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 }
 
 // this function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
-func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig, ind int) error {
+func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
-	currStream := (*(*config).managedStreamSlice)[ind]
+	currStream := (*(*config).managedStreamSlice)[streamIndex]
 
 	appendResult, err := currStream.managedstream.AppendRows(ctx, data)
 	if err != nil {
@@ -337,12 +337,12 @@ func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfi
 }
 
 // this function cases on the exactly/at-least once functionality and sends the data accordingly
-func sendRequest(ctx context.Context, data [][]byte, config **outputConfig, ind int) error {
+func sendRequest(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	if len(data) > 0 {
 		if (*config).exactlyOnce {
-			return sendRequestRetries(ctx, data, config, ind)
+			return sendRequestRetries(ctx, data, config, streamIndex)
 		} else {
-			return sendRequestDefault(ctx, data, config, ind)
+			return sendRequestDefault(ctx, data, config, streamIndex)
 		}
 	}
 	return nil
@@ -351,6 +351,11 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig, ind 
 // this is a test-only method that provides the instance count for configMap
 func getInstanceCount() int {
 	return len(configMap)
+}
+
+// Finds the stream index when dynamically scaling
+func getStreamIndex() int {
+	return 0
 }
 
 // this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
@@ -604,16 +609,17 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		}
 
 		if (currsize + len(buf)) >= config.maxChunkSize {
+			streamIndex := getStreamIndex()
 			// Appending Rows
 			// TODO: Change for desired stream, defaulting to 0 for now
-			err := sendRequest(ms_ctx, binaryData, &config, 0)
+			err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 			if err != nil {
 				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				return output.FLB_ERROR
 			}
 
 			// TODO: Change for desired stream, defaulting to 0 for now
-			streamSlice[0].offsetCounter += rowCounter
+			streamSlice[streamIndex].offsetCounter += rowCounter
 			rowCounter = 0
 
 			binaryData = nil
@@ -628,14 +634,15 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 	// Appending Rows
 	// TODO: Change for desired stream, defaulting to 0 for now
-	err := sendRequest(ms_ctx, binaryData, &config, 0)
+	streamIndex := getStreamIndex()
+	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 		return output.FLB_ERROR
 	}
 
 	// TODO: Change for desired stream, defaulting to 0 for now
-	streamSlice[0].offsetCounter += rowCounter
+	streamSlice[streamIndex].offsetCounter += rowCounter
 
 	return output.FLB_OK
 }
@@ -660,7 +667,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	streamSlice := *config.managedStreamSlice
 
 	// TODO: Change for desired stream, defaulting to 0 for now
-	ind := 0
+	streamIndex := 0
 
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
@@ -671,13 +678,13 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		}
 	}
 
-	if streamSlice[ind].managedstream != nil {
+	if streamSlice[streamIndex].managedstream != nil {
 		if config.exactlyOnce {
-			if _, err := streamSlice[ind].managedstream.Finalize(ms_ctx); err != nil {
+			if _, err := streamSlice[streamIndex].managedstream.Finalize(ms_ctx); err != nil {
 				log.Printf("Finalizing managed stream for output instance with id: %d failed in FLBPluginExit: %s", id, err)
 			}
 		}
-		if err := streamSlice[ind].managedstream.Close(); err != nil {
+		if err := streamSlice[streamIndex].managedstream.Close(); err != nil {
 			log.Printf("Closing managed stream for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
 			return output.FLB_ERROR
 		}
