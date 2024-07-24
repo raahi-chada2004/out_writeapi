@@ -180,35 +180,27 @@ var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Conte
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 // This function returns an int which is the length of the queue after being checked or -1 if there was some error.
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool) (int, error) {
+func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool, id int) int {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
 	for len(*currQueuePointer) > 0 {
 		if exactlyOnceConf {
-			return -1, errors.New("Exactly once")
+			log.Printf("Asynchronous response queue has non-zero size when exactly-once is configured")
+			break
 		}
 		queueHead := (*currQueuePointer)[0]
-		if waitForResponse {
-			recvOffset, err := pluginGetResult(queueHead, curr_ctx)
+		if waitForResponse || isReady(queueHead) {
+			_, err := pluginGetResult(queueHead, curr_ctx)
 			*currQueuePointer = (*currQueuePointer)[1:]
 			if err != nil {
-				return -1, err
+				log.Printf("Encountered error:%s while verifying the server response to a data append for output instance with id: %d", err, id)
 			}
-			log.Printf("Successfully appended data at offset %d.\n", recvOffset)
 		} else {
-			if isReady(queueHead) {
-				_, err := pluginGetResult(queueHead, curr_ctx)
-				*currQueuePointer = (*currQueuePointer)[1:]
-				if err != nil {
-					return -1, err
-				}
-			} else {
-				return len(*currQueuePointer), nil
-			}
+			break
 		}
 
 	}
-	return len(*currQueuePointer), nil
+	return len(*currQueuePointer)
 }
 
 // this function gets the value of various configuration fields and returns an error if the field could not be parsed
@@ -559,8 +551,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
 	id := getFLBPluginContext(ctx)
-	log.Printf("[multiinstance] Flush called for id: %d", id)
-
 	// Locate stream in map
 	// Look up through reference
 	config, ok := configMap[id]
@@ -574,11 +564,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// checks responses for each stream using a loop
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		_, responseErr := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce)
-		if responseErr != nil {
-			log.Printf("Checking append responses for output instance with id %d and stream number %d failed in FLBPluginFlushCtx", id, i)
-			return output.FLB_ERROR
-		}
+		// TODO: Use return from check resopnses to build stream if necessary
+		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
 	// TODO: Build a NewManagedStream if request count is above threshold
@@ -604,42 +591,39 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		//transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
 		buf, err := jsonToBinary(config.messageDescriptor, rowJSONMap)
 		if err != nil {
-			log.Printf("Transforming records from JSON to binary data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
-			return output.FLB_ERROR
-		}
+			log.Printf("Transforming row with value:%s from JSON to binary data for output instance with id: %d failed in FLBPluginFlushCtx: %s", rowJSONMap, id, err)
+		} else {
+			//successful data transformation
+			if (currsize + len(buf)) >= config.maxChunkSize {
+				streamIndex := getStreamIndex()
+				// Appending Rows
+				err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
+				if err != nil {
+					log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
+				} else {
+					streamSlice[streamIndex].offsetCounter += rowCounter
+				}
 
-		if (currsize + len(buf)) >= config.maxChunkSize {
-			streamIndex := getStreamIndex()
-			// Appending Rows
-			err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
-			if err != nil {
-				log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
-				return output.FLB_ERROR
+				rowCounter = 0
+
+				binaryData = nil
+				currsize = 0
+
 			}
-
-			streamSlice[streamIndex].offsetCounter += rowCounter
-			rowCounter = 0
-
-			binaryData = nil
-			currsize = 0
-
+			binaryData = append(binaryData, buf)
+			//include the protobuf overhead to the currsize variable
+			currsize += (len(buf) + 2)
+			rowCounter++
 		}
-		binaryData = append(binaryData, buf)
-		//include the protobuf overhead to the currsize variable
-		currsize += (len(buf) + 2)
-		rowCounter++
-
 	}
 	// Appending Rows
 	streamIndex := getStreamIndex()
 	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
-		return output.FLB_ERROR
+	} else {
+		streamSlice[streamIndex].offsetCounter += rowCounter
 	}
-
-	streamSlice[streamIndex].offsetCounter += rowCounter
-
 	return output.FLB_OK
 }
 
@@ -666,11 +650,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		_, responseErr := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce)
-		if responseErr != nil {
-			log.Printf("Checking append responses for output instance with id %d and stream number %d failed in FLBPluginFlushCtx", id, i)
-			return output.FLB_ERROR
-		}
+		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
 	if streamSlice[streamIndex].managedstream != nil {
