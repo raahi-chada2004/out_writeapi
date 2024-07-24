@@ -647,6 +647,8 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	streamSlice := *config.managedStreamSlice
 
 	sliceLen := len(streamSlice)
+	// Var to flag whether there was an error
+	errFlag := false
 	for i := 0; i < sliceLen; i++ {
 		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 
@@ -658,9 +660,12 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 			}
 			if err := streamSlice[i].managedstream.Close(); err != nil {
 				log.Printf("Closing managed stream for output instance with id %d and stream index %d failed in FLBPluginExitCtx: %s", id, i, err)
-				return output.FLB_ERROR
+				errFlag = true
 			}
 		}
+	}
+	if errFlag {
+		return output.FLB_ERROR
 	}
 
 	if config.client != nil {
