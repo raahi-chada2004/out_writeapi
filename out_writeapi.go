@@ -334,8 +334,8 @@ func getInstanceCount() int {
 }
 
 // this is a test-only method that provides the current offset of the passed in config struct
-func getOffset(config *outputConfig) int64 {
-	return config.offsetCounter
+func getOffset(id int) int64 {
+	return (configMap[id]).offsetCounter
 }
 
 // this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
