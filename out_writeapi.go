@@ -664,17 +664,17 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 			}
 		}
 	}
-	if errFlag {
-		return output.FLB_ERROR
-	}
 
 	if config.client != nil {
 		if err := config.client.Close(); err != nil {
 			log.Printf("Closing managed writer client for output instance with id: %d failed in FLBPluginExitCtx: %s", id, err)
-			return output.FLB_ERROR
+			errFlag = true
 		}
 	}
 
+	if errFlag {
+		return output.FLB_ERROR
+	}
 	return output.FLB_OK
 }
 
