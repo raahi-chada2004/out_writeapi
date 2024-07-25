@@ -83,4 +83,12 @@ The `Exactly_Once` field takes in a boolean that describes whether exactly-once 
 
 The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
+## Plugin Error Handling and Resilience
+The plugin is designed to log and handle both client-side and server-side errors, ensuring continuous and resilient data processing.
+
+ - Client-Side Errors: Errors that occur during data preparation, such as transforming data formats, are logged. The affected row is skipped, but processing continues for subsequent data.
+ - Server-Side Errors: These errors, such as those ocurring during communication with BigQuery, are also logged. If any row in a request fails, the entire request fails (adhering to the default behavior of BigQuery), but the plugin continues to process future requests.
+
+Regardless of the type of error, the plugin is built to maintain the flow of incoming data, ensuring that operations continue smoothly and that any issues are documented for troubleshooting.
+
 For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
