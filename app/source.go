@@ -22,7 +22,7 @@ func main() {
 
 	for {
 		curr := log_entry{
-			Val: "12:30:00.45",
+			Val: "hello",
 		}
 		entry, err := json.Marshal(curr)
 		if err != nil {

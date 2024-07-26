@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -37,7 +38,6 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
-import "math"
 
 // Struct for each stream - one stream per output
 type outputConfig struct {
@@ -75,22 +75,29 @@ const (
 	numRetriesDefault          = 4
 )
 
-// this function mangles the top-level BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, and TIME fields to STRING.
-// TODO: does not descend into complex schemas (structs).
+// this function mangles the top-level and complex BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, and TIME fields to STRING.
 func mangleInputSchema(input *storagepb.TableSchema) *storagepb.TableSchema {
 	if input == nil {
 		return nil
 	}
+	//create a clone of the table schema
 	newMsg := proto.Clone(input).(*storagepb.TableSchema)
 	newMsg.Fields = make([]*storagepb.TableFieldSchema, len(input.GetFields()))
 	for k, f := range input.GetFields() {
+		//create a clone of the field
 		newF := proto.Clone(f).(*storagepb.TableFieldSchema)
 		switch newF.GetType() {
+		//overwrite the field to be string
 		case storagepb.TableFieldSchema_NUMERIC,
 			storagepb.TableFieldSchema_BIGNUMERIC,
 			storagepb.TableFieldSchema_DATETIME,
 			storagepb.TableFieldSchema_TIME:
 			newF.Type = storagepb.TableFieldSchema_STRING
+		}
+		//if the field is a struct type it will have a non-zero number of fields
+		if len(newF.GetFields()) > 0 {
+			//call mangeInputSchema on the fields in the struct
+			newF.Fields = mangleInputSchema(&storagepb.TableSchema{Fields: newF.Fields}).Fields
 		}
 		newMsg.Fields[k] = newF
 	}

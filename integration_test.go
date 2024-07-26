@@ -79,7 +79,7 @@ func TestPipeline(t *testing.T) {
 		{Name: "GeographyField", Type: bigquery.GeographyFieldType},
 		{Name: "RecordField", Type: bigquery.RecordFieldType, Schema: bigquery.Schema{
 			{Name: "SubField1", Type: bigquery.StringFieldType},
-			{Name: "SubField2", Type: bigquery.IntegerFieldType},
+			{Name: "SubField2", Type: bigquery.NumericFieldType},
 		}},
 		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateFieldType}},
 	}
@@ -156,7 +156,7 @@ func TestPipeline(t *testing.T) {
 		assert.Equal(t, civil.DateTime{Date: civil.Date{Year: 2024, Month: 7, Day: 26}, Time: civil.Time{Hour: 12, Minute: 30, Second: 0, Nanosecond: 450000000}}, BQvalues[10].(civil.DateTime))
 		assert.Equal(t, "POINT(1 2)", BQvalues[11].(string))
 		assert.Equal(t, "sub field value", BQvalues[12].([]bigquery.Value)[0])
-		assert.Equal(t, int64(456), BQvalues[12].([]bigquery.Value)[1])
+		assert.Equal(t, big.NewRat(456, 10), (BQvalues[12].([]bigquery.Value)[1]).(*big.Rat))
 		assert.Equal(t, &bigquery.RangeValue{Start: civil.Date{Year: 2024, Month: 7, Day: 1}, End: civil.Date{Year: 2024, Month: 7, Day: 31}}, BQvalues[13])
 
 		rowCount++
@@ -267,7 +267,7 @@ type log_entry struct {
 	GeographyField  string  `json:"GeographyField"`
 	RecordField     struct {
 		SubField1 string `json:"SubField1"`
-		SubField2 int64  `json:"SubField2"`
+		SubField2 string `json:"SubField2"`
 	} `json:"RecordField"`
 	RangeField struct {
 		Start int32 `json:"start"`
@@ -303,10 +303,10 @@ func generateData(numRows int) error {
 			GeographyField: "POINT(1 2)",
 			RecordField: struct {
 				SubField1 string `json:"SubField1"`
-				SubField2 int64  `json:"SubField2"`
+				SubField2 string `json:"SubField2"`
 			}{
 				SubField1: "sub field value",
-				SubField2: 456,
+				SubField2: "45.6",
 			},
 			RangeField: struct {
 				Start int32 `json:"start"`
