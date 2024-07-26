@@ -317,7 +317,8 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
-	currStream := (*(*config).managedStreamSlice)[streamIndex]
+	streamSlice := *(*config).managedStreamSlice
+	currStream := streamSlice[streamIndex]
 
 	appendResult, err := currStream.managedstream.AppendRows(ctx, data)
 	if err != nil {
@@ -346,9 +347,16 @@ func getInstanceCount() int {
 }
 
 // Finds the stream index when dynamically scaling
-// TODO: Change function
-func getStreamIndex() int {
-	return 0
+func getStreamIndex(streamSlice *[]*streamConfig) int {
+	min := len(*(*streamSlice)[0].appendResults)
+	minStreamIndex := 0
+	for streamIndex, stream := range *streamSlice {
+		if len(*stream.appendResults) < min {
+			min = len(*stream.appendResults)
+			minStreamIndex = streamIndex
+		}
+	}
+	return minStreamIndex
 }
 
 // this is a test-only method that provides the current offset of the passed in config struct
@@ -558,6 +566,9 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
+	// DELETE BEFORE COMMIT + PUSH
+	log.Println("Flush called")
+
 	id := getFLBPluginContext(ctx)
 	// Locate stream in map
 	// Look up through reference
@@ -572,11 +583,35 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// checks responses for each stream using a loop
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		// TODO: Use return from check resopnses to build stream if necessary
-		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
+		// DELETE BEFORE COMMIT + PUSH
+		queueLength := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
+		log.Printf("Length of queue %d: %d", i, queueLength)
 	}
 
-	// TODO: Build a NewManagedStream if request count is above threshold
+	// Gets stream with least values in queue
+	mostEfficient := getStreamIndex(&streamSlice)
+
+	// TEST THRESHOLD PLEASE DELETE BEFORE COMMIT + PUSH
+	// threshold := config.requestCountThreshold
+	threshold := 20
+
+	var newResQueue []*managedwriter.AppendResult
+	var newStream = streamConfig{
+		offsetCounter: 0,
+		appendResults: &newResQueue,
+	}
+	if len(*(streamSlice)[mostEfficient].appendResults) > threshold {
+		// DELETE BEFORE COMMIT + PUSH
+		log.Println("New stream created")
+		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
+		err := buildStream(ms_ctx, &config)
+		if err != nil {
+			log.Printf("Creating an additional managed stream with destination table: %s failed in FLBPluginInit: %s", config.tableRef, err)
+			return output.FLB_ERROR
+		}
+	}
+	// DELETE BEFORE COMMIT + PUSH
+	log.Printf("After creating stream: %d", len(*config.managedStreamSlice))
 
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
@@ -603,7 +638,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		} else {
 			//successful data transformation
 			if (currsize + len(buf)) >= config.maxChunkSize {
-				streamIndex := getStreamIndex()
+				streamIndex := getStreamIndex(&streamSlice)
 				// Appending Rows
 				err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 				if err != nil {
@@ -625,13 +660,17 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		}
 	}
 	// Appending Rows
-	streamIndex := getStreamIndex()
+	streamIndex := getStreamIndex(&streamSlice)
 	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
 		streamSlice[streamIndex].offsetCounter += rowCounter
 	}
+
+	// DELETE BEFORE COMMIT + PUSH
+	log.Println("Done")
+
 	return output.FLB_OK
 }
 
