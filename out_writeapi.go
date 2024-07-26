@@ -346,6 +346,7 @@ func getInstanceCount() int {
 }
 
 // Finds the stream index when dynamically scaling
+// TODO: Change function
 func getStreamIndex() int {
 	return 0
 }
