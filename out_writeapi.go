@@ -75,6 +75,28 @@ const (
 	numRetriesDefault          = 4
 )
 
+// this function mangles the top-level BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, and TIME fields to STRING.
+// TODO: does not descend into complex schemas (structs).
+func mangleInputSchema(input *storagepb.TableSchema) *storagepb.TableSchema {
+	if input == nil {
+		return nil
+	}
+	newMsg := proto.Clone(input).(*storagepb.TableSchema)
+	newMsg.Fields = make([]*storagepb.TableFieldSchema, len(input.GetFields()))
+	for k, f := range input.GetFields() {
+		newF := proto.Clone(f).(*storagepb.TableFieldSchema)
+		switch newF.GetType() {
+		case storagepb.TableFieldSchema_NUMERIC,
+			storagepb.TableFieldSchema_BIGNUMERIC,
+			storagepb.TableFieldSchema_DATETIME,
+			storagepb.TableFieldSchema_TIME:
+			newF.Type = storagepb.TableFieldSchema_STRING
+		}
+		newMsg.Fields[k] = newF
+	}
+	return newMsg
+}
+
 // This function handles getting data on the schema of the table data is being written to.
 // getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
 func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
@@ -90,24 +112,30 @@ func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, pro
 	//call getwritestream to get data on the table
 	table_data, err := mw_client.GetWriteStream(curr_ctx, &req)
 	if err != nil {
+		log.Printf("first:%s", err)
 		return nil, nil, err
 	}
 	//get the schema from table data
-	table_schema := table_data.GetTableSchema()
+	init_table_schema := table_data.GetTableSchema()
+	//mangle the schema for relevant fields
+	table_schema := mangleInputSchema((init_table_schema))
 	//storage schema ->proto descriptor
 	descriptor, err := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 	if err != nil {
+		log.Printf("second:%s", err)
 		return nil, nil, err
 	}
 	//proto descriptor -> messageDescriptor
 	messageDescriptor, ok := descriptor.(protoreflect.MessageDescriptor)
 	if !ok {
+		log.Printf("third:%s", err)
 		return nil, nil, errors.New("Message descriptor could not be created from table's proto descriptor")
 	}
 
 	//messageDescriptor -> descriptor proto
 	dp, err := adapt.NormalizeDescriptor(messageDescriptor)
 	if err != nil {
+		log.Printf("fourth:%s", err)
 		return nil, nil, err
 	}
 
@@ -120,6 +148,7 @@ func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map
 	//JSON map -> JSON byte
 	row, err := json.Marshal(jsonRow)
 	if err != nil {
+		log.Printf("first:%s", err)
 		return nil, err
 	}
 	//create empty message
@@ -128,12 +157,14 @@ func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map
 	// First, json->proto message
 	err = protojson.Unmarshal(row, message)
 	if err != nil {
+		log.Printf("second:%s", err)
 		return nil, err
 	}
 
 	// Then, proto message -> bytes.
 	b, err := proto.Marshal(message)
 	if err != nil {
+		log.Printf("third:%s", err)
 		return nil, err
 	}
 
