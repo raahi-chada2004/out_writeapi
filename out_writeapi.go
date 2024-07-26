@@ -78,11 +78,46 @@ const (
 	exactlyOnceDefault         = false
 	queueRequestScalingPercent = 0.8
 	numRetriesDefault          = 4
+	dataTimeDefault            = true
 )
+
+// this function mangles the top-level and complex (struct) BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, TIME, and JSON fields to STRING.
+func mangleInputSchema(input *storagepb.TableSchema, dataTimeString bool) *storagepb.TableSchema {
+	if input == nil {
+		return nil
+	}
+	//create a clone of the table schema
+	newMsg := proto.Clone(input).(*storagepb.TableSchema)
+	newMsg.Fields = make([]*storagepb.TableFieldSchema, len(input.GetFields()))
+	for k, f := range input.GetFields() {
+		//create a clone of the field
+		newF := proto.Clone(f).(*storagepb.TableFieldSchema)
+		switch newF.GetType() {
+		//overwrite the field to be string
+		case storagepb.TableFieldSchema_NUMERIC,
+			storagepb.TableFieldSchema_BIGNUMERIC,
+			storagepb.TableFieldSchema_TIME,
+			storagepb.TableFieldSchema_JSON:
+			newF.Type = storagepb.TableFieldSchema_STRING
+
+		}
+		//if datatimestring is true, then set the field type to string
+		if newF.GetType() == storagepb.TableFieldSchema_DATETIME && dataTimeString {
+			newF.Type = storagepb.TableFieldSchema_STRING
+		}
+		//if the field is a struct type it will have a non-zero number of fields
+		if len(newF.GetFields()) > 0 {
+			//call mangeInputSchema on the fields in the struct
+			newF.Fields = mangleInputSchema(&storagepb.TableSchema{Fields: newF.Fields}, dataTimeString).Fields
+		}
+		newMsg.Fields[k] = newF
+	}
+	return newMsg
+}
 
 // This function handles getting data on the schema of the table data is being written to.
 // getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
-func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
+func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string, dataTimeString bool) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
 	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
@@ -98,7 +133,8 @@ func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, pro
 		return nil, nil, err
 	}
 	//get the schema from table data
-	table_schema := table_data.GetTableSchema()
+	init_table_schema := table_data.GetTableSchema()
+	table_schema := mangleInputSchema(init_table_schema, dataTimeString)
 	//storage schema ->proto descriptor
 	descriptor, err := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 	if err != nil {
@@ -224,7 +260,6 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 				finval = any(boolval).(T)
 			}
 		}
-
 	}
 	return finval, nil
 }
@@ -476,6 +511,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
+
+	dataTimeStringType, err := getConfigField(plugin, "DateTime_String_Type", dataTimeDefault)
+	if err != nil {
+		log.Printf("Invalid DateTime_Input_Type parameter in configuration file: %s", err)
+		return output.FLB_ERROR
+	}
+
 	//create new client
 	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
@@ -487,7 +529,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
 	//use getDescriptors to get the message descriptor, and descriptor proto
-	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID)
+	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID, dataTimeStringType)
 	if err != nil {
 		log.Printf("Getting message descriptor and descriptor proto for table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR

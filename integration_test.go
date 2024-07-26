@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/big"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/civil"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/api/iterator"
 )
@@ -36,7 +38,8 @@ const (
 	numRows        = 10
 )
 
-// integration test validates the end-to-end fluentbit and bigquery pipeline
+// integration test validates the end-to-end fluentbit and bigquery pipeline with all bigquery fields
+// data is inputted based on documentation (constraints for each field included there)
 func TestPipeline(t *testing.T) {
 
 	ctx := context.Background()
@@ -63,7 +66,25 @@ func TestPipeline(t *testing.T) {
 
 	// Create BigQuery dataset and table in an existing project
 	tableSchema := bigquery.Schema{
-		{Name: "Message", Type: bigquery.StringFieldType},
+		{Name: "StringField", Type: bigquery.StringFieldType},
+		{Name: "BytesField", Type: bigquery.BytesFieldType},
+		{Name: "IntegerField", Type: bigquery.IntegerFieldType},
+		{Name: "FloatField", Type: bigquery.FloatFieldType},
+		{Name: "NumericField", Type: bigquery.NumericFieldType},
+		{Name: "BigNumericField", Type: bigquery.BigNumericFieldType},
+		{Name: "BooleanField", Type: bigquery.BooleanFieldType},
+		{Name: "TimestampField", Type: bigquery.TimestampFieldType},
+		{Name: "DateField", Type: bigquery.DateFieldType},
+		{Name: "TimeField", Type: bigquery.TimeFieldType},
+		{Name: "DateTimeField", Type: bigquery.DateTimeFieldType},
+		{Name: "GeographyField", Type: bigquery.GeographyFieldType},
+		{Name: "RecordField", Type: bigquery.RecordFieldType, Schema: bigquery.Schema{
+			{Name: "SubField1", Type: bigquery.StringFieldType},
+			{Name: "SubField2", Type: bigquery.NumericFieldType},
+		}},
+		//when DateTime is the range element type, must send civil-time encoded int64 datetime data (as documented)
+		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateTimeFieldType}},
+		{Name: "JSONField", Type: bigquery.JSONFieldType},
 	}
 	dataset := client.Dataset(datasetID)
 	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
@@ -94,7 +115,7 @@ func TestPipeline(t *testing.T) {
 
 	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
-	if err := generateData(numRows, time.Second, false); err != nil {
+	if err := generateAllDataTypes(numRows); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -105,7 +126,7 @@ func TestPipeline(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT Message FROM `" + projectID + "." + datasetID + "." + tableID + "`"
+	queryMsg := "SELECT * FROM `" + projectID + "." + datasetID + "." + tableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -124,7 +145,23 @@ func TestPipeline(t *testing.T) {
 			t.Fatalf("Failed to read query results: %v", err)
 		}
 
+		//Verify the value of the data
 		assert.Equal(t, "hello world", BQvalues[0])
+		assert.Equal(t, []byte("hello bytes"), BQvalues[1])
+		assert.Equal(t, int64(123), BQvalues[2])
+		assert.Equal(t, float64(123.45), BQvalues[3])
+		assert.Equal(t, big.NewRat(12345, 100), (BQvalues[4].(*big.Rat)))
+		assert.Equal(t, big.NewRat(123456789123456789, 1000000000), BQvalues[5].(*big.Rat))
+		assert.Equal(t, true, BQvalues[6])
+		assert.Equal(t, time.Date(2024, time.July, 26, 6, 8, 46, 0, time.UTC), BQvalues[7])
+		assert.Equal(t, civil.Date{Year: 2024, Month: 7, Day: 25}, BQvalues[8].(civil.Date))
+		assert.Equal(t, civil.Time{Hour: 12, Minute: 34, Second: 56}, BQvalues[9].(civil.Time))
+		assert.Equal(t, civil.DateTime{Date: civil.Date{Year: 2024, Month: 7, Day: 26}, Time: civil.Time{Hour: 12, Minute: 30, Second: 0, Nanosecond: 450000000}}, BQvalues[10].(civil.DateTime))
+		assert.Equal(t, "POINT(1 2)", BQvalues[11].(string))
+		assert.Equal(t, "sub field value", BQvalues[12].([]bigquery.Value)[0])
+		assert.Equal(t, big.NewRat(456, 10), (BQvalues[12].([]bigquery.Value)[1]).(*big.Rat))
+		assert.Equal(t, &bigquery.RangeValue{Start: civil.DateTime{Date: civil.Date{Year: 1987, Month: 1, Day: 23}, Time: civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789012000}}, End: civil.DateTime{Date: civil.Date{Year: 1987, Month: 1, Day: 23}, Time: civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789013000}}}, BQvalues[13])
+		assert.Equal(t, "{\"age\":28,\"name\":\"Jane Doe\"}", BQvalues[14].(string))
 		rowCount++
 	}
 
@@ -585,6 +622,95 @@ func generateData(numRows int, sleepTime time.Duration, sendBadRow bool) error {
 		logger.Println(string(entry))
 
 		time.Sleep(sleepTime)
+	}
+
+	return nil
+}
+
+// Log entry template with all bigquery fields
+type log_entry_alltypes struct {
+	StringField     string  `json:"StringField"`
+	BytesField      []byte  `json:"BytesField"`
+	IntegerField    int64   `json:"IntegerField"`
+	FloatField      float64 `json:"FloatField"`
+	NumericField    string  `json:"NumericField"`
+	BigNumericField string  `json:"BigNumericField"`
+	BooleanField    bool    `json:"BooleanField"`
+	TimestampField  int64   `json:"TimestampField"`
+	DateField       int32   `json:"DateField"`
+	TimeField       string  `json:"TimeField"`
+	DateTimeField   string  `json:"DateTimeField"`
+	GeographyField  string  `json:"GeographyField"`
+	RecordField     struct {
+		SubField1 string `json:"SubField1"`
+		SubField2 string `json:"SubField2"`
+	} `json:"RecordField"`
+	RangeField struct {
+		Start int64 `json:"start"`
+		End   int64 `json:"end"`
+	} `json:"RangeField"`
+	JSONField string `json:"JSONField"`
+}
+
+// data generation function including all suported BQ fields
+func generateAllDataTypes(numRows int) error {
+	// open file
+	file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	logger := log.New(file, "", 0)
+
+	// send json marshalled data
+	for i := 0; i < numRows; i++ {
+		jsonData := map[string]interface{}{
+			"name": "Jane Doe",
+			"age":  28,
+		}
+		jsonBytes, err := json.Marshal(jsonData)
+		if err != nil {
+			return err
+		}
+
+		curr := log_entry_alltypes{
+			StringField:     "hello world",
+			BytesField:      []byte("hello bytes"),
+			IntegerField:    123,
+			FloatField:      123.45,
+			NumericField:    "123.45",
+			BigNumericField: "123456789.123456789",
+			BooleanField:    true,
+			//milliseconds since unix epoch
+			TimestampField: 1721974126000000,
+			//days since unix epoch
+			DateField:      19929,
+			TimeField:      "12:34:56",
+			DateTimeField:  "2024-07-26 12:30:00.45",
+			GeographyField: "POINT(1 2)",
+			RecordField: struct {
+				SubField1 string `json:"SubField1"`
+				SubField2 string `json:"SubField2"`
+			}{
+				SubField1: "sub field value",
+				SubField2: "45.6",
+			},
+			//hardcoded civil-time encoded value
+			RangeField: struct {
+				Start int64 `json:"start"`
+				End   int64 `json:"end"`
+			}{
+				Start: 139830307704277524,
+				End:   139830307704277525,
+			},
+			JSONField: string(jsonBytes),
+		}
+		entry, err := json.Marshal(curr)
+		if err != nil {
+			return err
+		}
+		logger.Println(string(entry))
+
+		time.Sleep(time.Second)
 	}
 
 	return nil
