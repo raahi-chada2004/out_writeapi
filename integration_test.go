@@ -81,7 +81,9 @@ func TestPipeline(t *testing.T) {
 			{Name: "SubField1", Type: bigquery.StringFieldType},
 			{Name: "SubField2", Type: bigquery.NumericFieldType},
 		}},
-		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateFieldType}},
+		//when DateTime is the range element type, must send civil-time encoded int64 datetime data (as documented)
+		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateTimeFieldType}},
+		{Name: "JSONField", Type: bigquery.JSONFieldType},
 	}
 	dataset := client.Dataset(datasetID)
 	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
@@ -157,7 +159,8 @@ func TestPipeline(t *testing.T) {
 		assert.Equal(t, "POINT(1 2)", BQvalues[11].(string))
 		assert.Equal(t, "sub field value", BQvalues[12].([]bigquery.Value)[0])
 		assert.Equal(t, big.NewRat(456, 10), (BQvalues[12].([]bigquery.Value)[1]).(*big.Rat))
-		assert.Equal(t, &bigquery.RangeValue{Start: civil.Date{Year: 2024, Month: 7, Day: 1}, End: civil.Date{Year: 2024, Month: 7, Day: 31}}, BQvalues[13])
+		assert.Equal(t, &bigquery.RangeValue{Start: civil.DateTime{Date: civil.Date{Year: 1987, Month: 1, Day: 23}, Time: civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789012000}}, End: civil.DateTime{Date: civil.Date{Year: 1987, Month: 1, Day: 23}, Time: civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789013000}}}, BQvalues[13])
+		assert.Equal(t, "{\"age\":28,\"name\":\"Jane Doe\"}", BQvalues[14].(string))
 
 		rowCount++
 	}
@@ -270,9 +273,10 @@ type log_entry struct {
 		SubField2 string `json:"SubField2"`
 	} `json:"RecordField"`
 	RangeField struct {
-		Start int32 `json:"start"`
-		End   int32 `json:"end"`
+		Start int64 `json:"start"`
+		End   int64 `json:"end"`
 	} `json:"RangeField"`
+	JSONField string `json:"JSONField"`
 }
 
 // data generation function
@@ -286,6 +290,15 @@ func generateData(numRows int) error {
 
 	// send json marshalled data
 	for i := 0; i < numRows; i++ {
+		jsonData := map[string]interface{}{
+			"name": "Jane Doe",
+			"age":  28,
+		}
+		jsonBytes, err := json.Marshal(jsonData)
+		if err != nil {
+			return err
+		}
+
 		curr := log_entry{
 			StringField:     "hello world",
 			BytesField:      []byte("hello bytes"),
@@ -308,13 +321,15 @@ func generateData(numRows int) error {
 				SubField1: "sub field value",
 				SubField2: "45.6",
 			},
+			//hardcoded civil-time encoded value
 			RangeField: struct {
-				Start int32 `json:"start"`
-				End   int32 `json:"end"`
+				Start int64 `json:"start"`
+				End   int64 `json:"end"`
 			}{
-				Start: 19905,
-				End:   19935,
+				Start: 139830307704277524,
+				End:   139830307704277525,
 			},
+			JSONField: string(jsonBytes),
 		}
 		entry, err := json.Marshal(curr)
 		if err != nil {

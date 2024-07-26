@@ -91,7 +91,8 @@ func mangleInputSchema(input *storagepb.TableSchema) *storagepb.TableSchema {
 		case storagepb.TableFieldSchema_NUMERIC,
 			storagepb.TableFieldSchema_BIGNUMERIC,
 			storagepb.TableFieldSchema_DATETIME,
-			storagepb.TableFieldSchema_TIME:
+			storagepb.TableFieldSchema_TIME,
+			storagepb.TableFieldSchema_JSON:
 			newF.Type = storagepb.TableFieldSchema_STRING
 		}
 		//if the field is a struct type it will have a non-zero number of fields

@@ -21,8 +21,16 @@ func main() {
 	}
 
 	for {
+		jsonData := map[string]interface{}{
+			"name": "Jane Doe",
+			"age":  28,
+		}
+		jsonBytes, err := json.Marshal(jsonData)
+		if err != nil {
+			break
+		}
 		curr := log_entry{
-			Val: "hello",
+			Val: string(jsonBytes),
 		}
 		entry, err := json.Marshal(curr)
 		if err != nil {
