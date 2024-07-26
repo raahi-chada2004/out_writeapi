@@ -273,7 +273,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 		return err
 	}
 	//synchronously check the response immediately after appending data with exactly once semantics
-	_, err = appendResult.GetResult(ctx)
+	_, err = pluginGetResult(appendResult, ctx)
 	if err != nil {
 		return err
 	}
@@ -348,6 +348,13 @@ func getInstanceCount() int {
 // Finds the stream index when dynamically scaling
 func getStreamIndex() int {
 	return 0
+}
+
+// this is a test-only method that provides the current offset of the passed in config struct
+func getOffset(id int) int64 {
+	config := configMap[id]
+	streamSlice := *config.managedStreamSlice
+	return streamSlice[0].offsetCounter
 }
 
 // this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
