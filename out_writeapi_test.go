@@ -593,7 +593,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 
 	patchSetThreshold := setThreshold
 	setThreshold = func(queueSize int) int {
-		return 2
+		return 4
 	}
 	defer func() { setThreshold = patchSetThreshold }()
 
@@ -668,12 +668,14 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
+	// New stream should be built here
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
+	// New stream should be built here
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
-	assert.Equal(t, 0, checks.buildStreamCalled)
+	assert.Equal(t, 2, checks.buildStreamCalled)
 }
 
 func TestFLBPluginFlushCtxExactlyOnce(t *testing.T) {
