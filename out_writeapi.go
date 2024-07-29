@@ -566,9 +566,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	// DELETE BEFORE COMMIT + PUSH
-	log.Println("Flush called")
-
 	id := getFLBPluginContext(ctx)
 	// Locate stream in map
 	// Look up through reference
@@ -583,17 +580,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// checks responses for each stream using a loop
 	sliceLen := len(streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		// DELETE BEFORE COMMIT + PUSH
-		queueLength := checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
-		log.Printf("Length of queue %d: %d", i, queueLength)
+		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
 	// Gets stream with least values in queue
 	mostEfficient := getStreamIndex(&streamSlice)
 
-	// TEST THRESHOLD PLEASE DELETE BEFORE COMMIT + PUSH
-	// threshold := config.requestCountThreshold
-	threshold := 20
+	threshold := config.requestCountThreshold
 
 	var newResQueue []*managedwriter.AppendResult
 	var newStream = streamConfig{
@@ -601,17 +594,15 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		appendResults: &newResQueue,
 	}
 	if len(*(streamSlice)[mostEfficient].appendResults) > threshold {
-		// DELETE BEFORE COMMIT + PUSH
-		log.Println("New stream created")
+		config.mutex.Lock()
 		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
 		err := buildStream(ms_ctx, &config)
 		if err != nil {
 			log.Printf("Creating an additional managed stream with destination table: %s failed in FLBPluginInit: %s", config.tableRef, err)
 			return output.FLB_ERROR
 		}
+		config.mutex.Unlock()
 	}
-	// DELETE BEFORE COMMIT + PUSH
-	log.Printf("After creating stream: %d", len(*config.managedStreamSlice))
 
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
@@ -667,9 +658,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	} else {
 		streamSlice[streamIndex].offsetCounter += rowCounter
 	}
-
-	// DELETE BEFORE COMMIT + PUSH
-	log.Println("Done")
 
 	return output.FLB_OK
 }
