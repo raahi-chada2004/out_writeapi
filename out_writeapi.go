@@ -326,6 +326,7 @@ func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfi
 	}
 
 	*currStream.appendResults = append(*currStream.appendResults, appendResult)
+	log.Printf("results length: %d", len(*currStream.appendResults))
 	return nil
 }
 
@@ -348,9 +349,11 @@ func getInstanceCount() int {
 
 // Finds the stream index when dynamically scaling
 func getStreamIndex(streamSlice *[]*streamConfig) int {
+	log.Printf("Stream min called: %d", len(*streamSlice))
 	min := len(*(*streamSlice)[0].appendResults)
 	minStreamIndex := 0
 	for streamIndex, stream := range *streamSlice {
+		log.Printf("Checking stream min: %d", len(*stream.appendResults))
 		if len(*stream.appendResults) < min {
 			min = len(*stream.appendResults)
 			minStreamIndex = streamIndex
@@ -364,6 +367,15 @@ func getOffset(id int) int64 {
 	config := configMap[id]
 	streamSlice := *config.managedStreamSlice
 	return streamSlice[0].offsetCounter
+}
+
+// method ot determine threshold
+var setThreshold = func(queueSize int) int {
+	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
+	if requestCountThreshold < 10 {
+		requestCountThreshold = 10
+	}
+	return requestCountThreshold
 }
 
 // this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
@@ -475,10 +487,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 	// Multiply floats, floor it, then convert it to integer for ease of use in Flush
-	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
-	if requestCountThreshold < 10 {
-		requestCountThreshold = 10
-	}
+	requestCountThreshold := setThreshold(queueSize)
 	queueByteSize, err := getConfigField(plugin, "Max_Queue_Bytes", queueByteDefault)
 	if err != nil {
 		log.Printf("Invalid Max_Queue_Bytes parameter in configuration file: %s", err)
@@ -575,16 +584,18 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		return output.FLB_ERROR
 	}
 	// Holds stream slice for ease of use
-	streamSlice := *config.managedStreamSlice
+	streamSlice := config.managedStreamSlice
+	log.Printf("results length flush: %d", len(*(*streamSlice)[0].appendResults))
 
 	// checks responses for each stream using a loop
-	sliceLen := len(streamSlice)
+	sliceLen := len(*streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
+		checkResponses(ms_ctx, (*streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
 	// Gets stream with least values in queue
-	mostEfficient := getStreamIndex(&streamSlice)
+	mostEfficient := getStreamIndex(config.managedStreamSlice)
+	log.Printf("Most efficient: %d", mostEfficient)
 
 	threshold := config.requestCountThreshold
 
@@ -593,7 +604,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		offsetCounter: 0,
 		appendResults: &newResQueue,
 	}
-	if len(*(streamSlice)[mostEfficient].appendResults) > threshold {
+	log.Printf("Queue length: %d", len(*(*config.managedStreamSlice)[0].appendResults))
+	if len(*(*streamSlice)[mostEfficient].appendResults) > threshold {
+		log.Printf("In if statement")
 		config.mutex.Lock()
 		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
 		err := buildStream(ms_ctx, &config)
@@ -602,7 +615,11 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 			return output.FLB_ERROR
 		}
 		config.mutex.Unlock()
+		log.Printf("slice length: %d", len(*config.managedStreamSlice))
+		log.Printf("Queue length1: %d", len(*(*config.managedStreamSlice)[0].appendResults))
+		log.Printf("Queue length2: %d", len(*(*config.managedStreamSlice)[1].appendResults))
 	}
+	log.Printf("stream slice length: %d", len(*streamSlice))
 
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
@@ -629,13 +646,14 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		} else {
 			//successful data transformation
 			if (currsize + len(buf)) >= config.maxChunkSize {
-				streamIndex := getStreamIndex(&streamSlice)
+				streamIndex := getStreamIndex(config.managedStreamSlice)
 				// Appending Rows
+				log.Printf("In chunking with index: %d", streamIndex)
 				err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 				if err != nil {
 					log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				} else {
-					streamSlice[streamIndex].offsetCounter += rowCounter
+					(*config.managedStreamSlice)[streamIndex].offsetCounter += rowCounter
 				}
 
 				rowCounter = 0
@@ -651,12 +669,12 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		}
 	}
 	// Appending Rows
-	streamIndex := getStreamIndex(&streamSlice)
+	streamIndex := getStreamIndex(config.managedStreamSlice)
 	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
-		streamSlice[streamIndex].offsetCounter += rowCounter
+		(*streamSlice)[streamIndex].offsetCounter += rowCounter
 	}
 
 	return output.FLB_OK
