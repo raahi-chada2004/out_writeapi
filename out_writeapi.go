@@ -78,7 +78,7 @@ const (
 	exactlyOnceDefault         = false
 	queueRequestScalingPercent = 0.8
 	numRetriesDefault          = 4
-	dataTimeDefault            = true
+	dateTimeDefault            = true
 )
 
 // this function mangles the top-level and complex (struct) BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, TIME, and JSON fields to STRING.
@@ -512,7 +512,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	dataTimeStringType, err := getConfigField(plugin, "DateTime_String_Type", dataTimeDefault)
+	dateTimeStringType, err := getConfigField(plugin, "DateTime_String_Type", dateTimeDefault)
 	if err != nil {
 		log.Printf("Invalid DateTime_Input_Type parameter in configuration file: %s", err)
 		return output.FLB_ERROR
@@ -529,7 +529,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
 	//use getDescriptors to get the message descriptor, and descriptor proto
-	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID, dataTimeStringType)
+	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID, dateTimeStringType)
 	if err != nil {
 		log.Printf("Getting message descriptor and descriptor proto for table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
