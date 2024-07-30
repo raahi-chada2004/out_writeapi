@@ -293,13 +293,15 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		if rebuildPredicate(err) {
 			streamSlice := (*config).managedStreamSlice
 			// finalizes all streams
-			for i := 0; i < len(*streamSlice); i++ {
-				currStream := (*streamSlice)[i]
-				currStream.managedstream.Finalize(ctx)
-				currStream.managedstream.Close()
+			for _, stream := range *streamSlice {
+				stream.managedstream.Finalize(ctx)
+				stream.managedstream.Close()
 			}
 			// eliminates all streams but the first one to build from the bottom up again
 			(*(*config).managedStreamSlice) = (*(*config).managedStreamSlice)[:1]
+			// Initializes results queue and offset counter to default values
+			(*(*config).managedStreamSlice)[0].offsetCounter = 0
+			*(*(*config).managedStreamSlice)[0].appendResults = []*managedwriter.AppendResult{}
 			err := buildStream(ctx, config)
 			if err != nil {
 				return err
@@ -372,7 +374,7 @@ func getOffset(id int) int64 {
 	return streamSlice[0].offsetCounter
 }
 
-// method ot determine threshold
+// Method to determine threshold
 var setThreshold = func(queueSize int) int {
 	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(queueSize)))
 	if requestCountThreshold < 10 {

@@ -498,6 +498,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	checks := new(dynamicScaleChecks)
 	var setID int
 
+	// Sets schema for table
 	testTableSchema := &storagepb.TableSchema{
 		Fields: []*storagepb.TableFieldSchema{
 			{Name: "Time", Type: storagepb.TableFieldSchema_STRING, Mode: storagepb.TableFieldSchema_NULLABLE},
@@ -505,6 +506,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		},
 	}
 
+	// Mock Client
 	mockClient := &MockManagedWriterClient{
 		NewManagedStreamFunc: func(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error) {
 			return nil, nil
@@ -518,6 +520,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		},
 	}
 
+	// Patches config key to set values
 	patch1 := monkey.Patch(output.FLBPluginConfigKey, func(plugin unsafe.Pointer, key string) string {
 		switch key {
 		case "Max_Chunk_Size":
@@ -532,12 +535,14 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	})
 	defer patch1.Unpatch()
 
+	// Returns mock client instead of an actual one
 	originalFunc := getClient
 	getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
 		return mockClient, nil
 	}
 	defer func() { getClient = originalFunc }()
 
+	// returns mock message descriptor
 	testGetDescrip := func() (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 		table_schema := testTableSchema
 		descriptor, _ := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
@@ -547,6 +552,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		return messageDescriptor, dp
 	}
 
+	// mock managedstream
 	md, _ := testGetDescrip()
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -580,6 +586,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		},
 	}
 
+	// returns mock managedstream
 	origFunc := getWriter
 	getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
 		return mockMS, nil
@@ -597,8 +604,10 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	}
 	defer func() { setThreshold = patchSetThreshold }()
 
+	// calls init
 	initRes := FLBPluginInit(nil)
 
+	// begin mocking for flush call
 	orgFunc := getFLBPluginContext
 	getFLBPluginContext = func(ctx unsafe.Pointer) int {
 		return setID
@@ -612,6 +621,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	}
 	defer func() { isReady = origReadyFunc }()
 
+	// Returns result of append rows
 	origResultFunc := pluginGetResult
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
 		return -1, nil
@@ -623,6 +633,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	})
 	defer patchDecoder.Unpatch()
 
+	// sending rows and data
 	var rowSent int = 0
 	var rowCount int = 5
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
@@ -641,6 +652,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	})
 	defer patchRecord.Unpatch()
 
+	// creates new stream with a mock build stream fucntion
 	patchBuild := monkey.Patch(buildStream, func(ctx context.Context, config **outputConfig) error {
 		checks.buildStreamCalled++
 		currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
