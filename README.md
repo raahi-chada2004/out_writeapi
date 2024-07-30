@@ -106,7 +106,7 @@ The `DateTime_String_Type` field takes in a boolean that describes whether the p
 |RECORD            |struct                   |
 
 Examples of sending each data type are included in integration_test.go \
-Encoding details can be found at: https://cloud.google.com/bigquery/docs/write-api#data_type_conversions
+Encoding details can be found here: [BigQuery Write API Protobuf Data Type Conversions](https://cloud.google.com/bigquery/docs/write-api#data_type_conversions)
 
 ## Plugin Error Handling and Resilience
 The plugin is designed to log and handle both client-side and server-side errors, ensuring continuous and resilient data processing.
