@@ -81,19 +81,19 @@ const (
 	dateTimeDefault            = true
 )
 
-// this function mangles the top-level and complex (struct) BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, TIME, and JSON fields to STRING.
+// This function mangles the top-level and complex (struct) BigQuery schema to convert NUMERIC, BIGNUMERIC, DATETIME, TIME, and JSON fields to STRING.
 func mangleInputSchema(input *storagepb.TableSchema, dataTimeString bool) *storagepb.TableSchema {
 	if input == nil {
 		return nil
 	}
-	//create a clone of the table schema
+	// Create a clone of the table schema
 	newMsg := proto.Clone(input).(*storagepb.TableSchema)
 	newMsg.Fields = make([]*storagepb.TableFieldSchema, len(input.GetFields()))
 	for k, f := range input.GetFields() {
-		//create a clone of the field
+		// Create a clone of the field
 		newF := proto.Clone(f).(*storagepb.TableFieldSchema)
 		switch newF.GetType() {
-		//overwrite the field to be string
+		// Overwrite the field to be string
 		case storagepb.TableFieldSchema_NUMERIC,
 			storagepb.TableFieldSchema_BIGNUMERIC,
 			storagepb.TableFieldSchema_TIME,
@@ -101,13 +101,13 @@ func mangleInputSchema(input *storagepb.TableSchema, dataTimeString bool) *stora
 			newF.Type = storagepb.TableFieldSchema_STRING
 
 		}
-		//if datatimestring is true, then set the field type to string
+		// If datatimestring is true, then set the field type to string
 		if newF.GetType() == storagepb.TableFieldSchema_DATETIME && dataTimeString {
 			newF.Type = storagepb.TableFieldSchema_STRING
 		}
-		//if the field is a struct type it will have a non-zero number of fields
+		// If the field is a struct type it will have a non-zero number of fields
 		if len(newF.GetFields()) > 0 {
-			//call mangeInputSchema on the fields in the struct
+			// Call mangeInputSchema on the fields in the struct
 			newF.Fields = mangleInputSchema(&storagepb.TableSchema{Fields: newF.Fields}, dataTimeString).Fields
 		}
 		newMsg.Fields[k] = newF

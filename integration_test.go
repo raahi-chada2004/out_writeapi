@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"reflect"
 	"testing"
 	"text/template"
 	"time"
@@ -38,8 +39,8 @@ const (
 	numRows        = 10
 )
 
-// integration test validates the end-to-end fluentbit and bigquery pipeline with all bigquery fields
-// data is inputted based on documentation (constraints for each field included there)
+// Integration test validates the end-to-end fluentbit and bigquery pipeline with all bigquery fields
+// Data is inputted based on documentation (constraints for each field included there)
 func TestPipeline(t *testing.T) {
 
 	ctx := context.Background()
@@ -144,6 +145,8 @@ func TestPipeline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to read query results: %v", err)
 		}
+		// Verify size of the data
+		assert.Equal(t, len(BQvalues), reflect.TypeOf(log_entry_alltypes{}).NumField())
 
 		//Verify the value of the data
 		assert.Equal(t, "hello world", BQvalues[0])
@@ -464,7 +467,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
-	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
+	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, (500 * time.Millisecond), true); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
@@ -563,9 +566,9 @@ type Config struct {
 	CurrExactlyOnce string
 }
 
-// function creates configuration file with the input as the TableId field
+// Function creates configuration file with the input as the TableId field
 func createConfigFile(currProjectID string, currDatasetID string, currTableID string, currExactlyOnceVal string) error {
-	//struct with the TableId
+	// Struct with the TableId
 	config := Config{
 		CurrLogfilePath: logFilePath,
 		CurrProjectName: currProjectID,
@@ -574,20 +577,20 @@ func createConfigFile(currProjectID string, currDatasetID string, currTableID st
 		CurrExactlyOnce: currExactlyOnceVal,
 	}
 
-	//create a new template with the format of configTemplate
+	// Create a new template with the format of configTemplate
 	tmpl, err := template.New("currConfig").Parse(configTemplate)
 	if err != nil {
 		return err
 	}
 
-	//create the new file
+	// Create the new file
 	file, err := os.Create("./fluent-bit.conf")
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	//return file with the given template and TableId
+	// Return file with the given template and TableId
 	return tmpl.Execute(file, config)
 }
 
@@ -619,6 +622,7 @@ func generateData(numRows int, sleepTime time.Duration, sendBadRow bool) error {
 		if err != nil {
 			return err
 		}
+		// Write data to source logfile with logger.Println call
 		logger.Println(string(entry))
 
 		time.Sleep(sleepTime)
@@ -652,16 +656,16 @@ type log_entry_alltypes struct {
 	JSONField string `json:"JSONField"`
 }
 
-// data generation function including all suported BQ fields
+// Data generation function including all suported BQ fields
 func generateAllDataTypes(numRows int) error {
-	// open file
+	// Open file
 	file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return err
 	}
 	logger := log.New(file, "", 0)
 
-	// send json marshalled data
+	// Send json marshalled data
 	for i := 0; i < numRows; i++ {
 		jsonData := map[string]interface{}{
 			"name": "Jane Doe",
@@ -680,9 +684,9 @@ func generateAllDataTypes(numRows int) error {
 			NumericField:    "123.45",
 			BigNumericField: "123456789.123456789",
 			BooleanField:    true,
-			//milliseconds since unix epoch
+			// Milliseconds since unix epoch
 			TimestampField: 1721974126000000,
-			//days since unix epoch
+			// Days since unix epoch
 			DateField:      19929,
 			TimeField:      "12:34:56",
 			DateTimeField:  "2024-07-26 12:30:00.45",
@@ -694,7 +698,7 @@ func generateAllDataTypes(numRows int) error {
 				SubField1: "sub field value",
 				SubField2: "45.6",
 			},
-			//hardcoded civil-time encoded value
+			// Hardcoded civil-time encoded value
 			RangeField: struct {
 				Start int64 `json:"start"`
 				End   int64 `json:"end"`
@@ -708,6 +712,7 @@ func generateAllDataTypes(numRows int) error {
 		if err != nil {
 			return err
 		}
+		// Write data to source logfile with logger.Println call
 		logger.Println(string(entry))
 
 		time.Sleep(time.Second)
