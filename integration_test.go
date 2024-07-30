@@ -83,7 +83,7 @@ func TestPipeline(t *testing.T) {
 			{Name: "SubField1", Type: bigquery.StringFieldType},
 			{Name: "SubField2", Type: bigquery.NumericFieldType},
 		}},
-		//when DateTime is the range element type, must send civil-time encoded int64 datetime data (as documented)
+		// When DateTime is the range element type, must send civil-time encoded int64 datetime data (as documented)
 		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateTimeFieldType}},
 		{Name: "JSONField", Type: bigquery.JSONFieldType},
 	}
@@ -136,7 +136,7 @@ func TestPipeline(t *testing.T) {
 
 	rowCount := 0
 	for {
-		//Check that the data sent is correct
+		// Check that the data sent is correct
 		var BQvalues []bigquery.Value
 		err := BQdata.Next(&BQvalues)
 		if err == iterator.Done {
@@ -148,7 +148,7 @@ func TestPipeline(t *testing.T) {
 		// Verify size of the data
 		assert.Equal(t, len(BQvalues), reflect.TypeOf(log_entry_alltypes{}).NumField())
 
-		//Verify the value of the data
+		// Verify the value of the data
 		assert.Equal(t, "hello world", BQvalues[0])
 		assert.Equal(t, []byte("hello bytes"), BQvalues[1])
 		assert.Equal(t, int64(123), BQvalues[2])
