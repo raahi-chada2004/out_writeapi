@@ -48,7 +48,7 @@ The WriteAPI Output Plugin enables a customer to send data to Google BigQuery wi
     Parsers_File    path/to/jsonparser.conf
     plugins_file    path/to/plugins.conf
 ```
-The `Parsers_File` field points to the parsing of your input and the `plugins_file` field is the path to the plugin you wish to use. The paths here are the absolute or relative paths to the files.
+The `Parsers_File` field points to the parsing of your input. An example parsers file is included as jsonparser.conf. The `plugins_file` field is the path to the binary plugin file you wish to use. An example plugins file is included as plugins.conf. The paths here are the absolute or relative paths to the files.
 
 Here is an example of a `INPUT` section:
 ```
@@ -90,5 +90,13 @@ The plugin is designed to log and handle both client-side and server-side errors
  - Server-Side Errors: These errors, such as those ocurring during communication with BigQuery, are also logged. If any row in a request fails, the entire request fails (adhering to the default behavior of BigQuery), but the plugin continues to process future requests.
 
 Regardless of the type of error, the plugin is built to maintain the flow of incoming data, ensuring that operations continue smoothly and that any issues are documented for troubleshooting.
+
+## Backpressure and Buffering
+This plugin utilizes dynamic stream scaling up when the rate of data being sent from Fluent Bit is too great for a single managed stream. However, to manage backpressure from the input/source to Fluent Bit itself, Fluent Bit implements its own buffering system where processed data is temporarily stored before being sent out. Fluent Bit primarily uses memory for buffering but can also utilize filesystem-based buffering for enhanced data safety.
+
+- Memory Buffering: Fluent Bit stores data chunks in memory by default. This method is fast but can lead to high memory usage under heavy load or network delays. To manage this, you can set a `Mem_Buf_Limit` field in the input section of the configuration field, which will restrict the memroy used by an input plugin, pausing data ingestion when the limit is reached. The tail input plugin is often sufficient with memory buffering due to its ability to track log offsets which minimizes data loss during pauses.
+- Filesystem Buffering: For greater data safety, filesystem buffering can be used. This requires finding a relevant input plugin that configures the storage.type to filesystem in its settings. This method stores data chunks both in memory and on disk, which gives control over memory usage.
+
+More information on Fluent Bit buffering can be found here: [Fluent Bit: Official Manual - Buffering & Storage](https://docs.fluentbit.io/manual/administration/buffering-and-storage)
 
 For more information, look to [Fluentbit Official Guide to a Config File](https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file)
