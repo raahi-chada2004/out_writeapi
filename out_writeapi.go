@@ -284,7 +284,6 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
-	currStream := (*(*config).managedStreamSlice)[streamIndex]
 	for {
 		err := sendRequestExactlyOnce(ctx, data, config, streamIndex)
 		if err == nil {
@@ -292,8 +291,15 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		}
 		//unsuccesful data append
 		if rebuildPredicate(err) {
-			currStream.managedstream.Finalize(ctx)
-			currStream.managedstream.Close()
+			streamSlice := (*config).managedStreamSlice
+			// finalizes all streams
+			for i := 0; i < len(*streamSlice); i++ {
+				currStream := (*streamSlice)[i]
+				currStream.managedstream.Finalize(ctx)
+				currStream.managedstream.Close()
+			}
+			// eliminates all streams but the first one to build from the bottom up again
+			(*(*config).managedStreamSlice) = (*(*config).managedStreamSlice)[:1]
 			err := buildStream(ctx, config)
 			if err != nil {
 				return err
