@@ -83,6 +83,8 @@ The `Exactly_Once` field takes in a boolean that describes whether exactly-once 
 
 The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
+Once the configuration file is set and the source is properly configured, the command `fluent-bit -c nameOfFile.conf` will start sending data to BigQuery.
+
 ## Plugin Error Handling and Resilience
 The plugin is designed to log and handle both client-side and server-side errors, ensuring continuous and resilient data processing.
 
