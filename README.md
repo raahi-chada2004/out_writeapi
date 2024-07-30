@@ -36,7 +36,7 @@ sudo make install
 ```
 
 ## Setting Up the Plugin
-Clone this repository into it's own directory. The binary file should be up to date, but you can make it again by running `go build -buildmode=c-shared -o out_writeapi.so out_writeapi.go`. This command generates a header file (`out_writeapi.h`) and the binary file (`out_writeapi.so`). If this command gives you an `undefined` error, you may also be able to get both the header and binary file by running `go build -buildmode=c-shared -o out_writeapi.so out_writeapi.go retry.go`.
+Clone this repository into its own directory. The binary file should be up to date, but you can make it again by running `go build -buildmode=c-shared -o out_writeapi.so out_writeapi.go`. This command generates a header file (`out_writeapi.h`) and the binary file (`out_writeapi.so`). If this command gives you an `undefined` error, you may also be able to get both the header and binary file by running `go build -buildmode=c-shared -o out_writeapi.so out_writeapi.go retry.go`.
 
 ## Configuration File and Parameters
 The WriteAPI Output Plugin enables a customer to send data to Google BigQuery without writing any code. Most of the work is done through the `config` file (named something like `examplefile.config`). The FluentBit `config` file should contain the following sections at the very least: `SERVICE`, `INPUT`, `OUTPUT`. The following is an example of a `SERVICE` section:
