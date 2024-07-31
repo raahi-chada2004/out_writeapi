@@ -230,7 +230,7 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 }
 
 // this function creates a new managed stream based on the config struct fields
-func buildStream(ctx context.Context, config **outputConfig) error {
+func buildStream(ctx context.Context, config **outputConfig, streamIndex int) error {
 	currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
 		managedwriter.WithType((*config).streamType),
 		managedwriter.WithDestinationTable((*config).tableRef),
@@ -244,7 +244,6 @@ func buildStream(ctx context.Context, config **outputConfig) error {
 	streamSlice := *(*config).managedStreamSlice
 
 	if err == nil {
-		streamIndex := len(streamSlice) - 1
 		(streamSlice)[streamIndex].managedstream = currManagedStream
 	}
 	return err
@@ -284,6 +283,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
+	currStream := (*(*config).managedStreamSlice)[streamIndex]
 	for {
 		err := sendRequestExactlyOnce(ctx, data, config, streamIndex)
 		if err == nil {
@@ -291,18 +291,9 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		}
 		//unsuccesful data append
 		if rebuildPredicate(err) {
-			streamSlice := (*config).managedStreamSlice
-			// finalizes all streams
-			for _, stream := range *streamSlice {
-				stream.managedstream.Finalize(ctx)
-				stream.managedstream.Close()
-			}
-			// eliminates all streams but the first one to build from the bottom up again
-			(*(*config).managedStreamSlice) = (*(*config).managedStreamSlice)[:1]
-			// Initializes results queue and offset counter to default values
-			(*(*config).managedStreamSlice)[0].offsetCounter = 0
-			*(*(*config).managedStreamSlice)[0].appendResults = []*managedwriter.AppendResult{}
-			err := buildStream(ctx, config)
+			currStream.managedstream.Finalize(ctx)
+			currStream.managedstream.Close()
+			err := buildStream(ctx, config, streamIndex)
 			if err != nil {
 				return err
 			}
@@ -555,7 +546,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	// Create stream using NewManagedStream
 	configPointer := &config
-	err = buildStream(ms_ctx, &configPointer)
+	err = buildStream(ms_ctx, &configPointer, 0)
 	if err != nil {
 		log.Printf("Creating a new managed stream with destination table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
@@ -610,7 +601,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	if len(*(*streamSlice)[mostEfficient].appendResults) > threshold {
 		config.mutex.Lock()
 		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
-		err := buildStream(ms_ctx, &config)
+		newStreamIndex := len(*config.managedStreamSlice) - 1
+		err := buildStream(ms_ctx, &config, newStreamIndex)
 		if err != nil {
 			log.Printf("Creating an additional managed stream with destination table: %s failed in FLBPluginInit: %s", config.tableRef, err)
 			return output.FLB_ERROR
