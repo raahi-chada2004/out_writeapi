@@ -239,7 +239,7 @@ func buildStream(ctx context.Context, config **outputConfig) error {
 		managedwriter.EnableWriteRetries((*config).enableRetry),
 		managedwriter.WithMaxInflightBytes((*config).maxQueueBytes),
 		managedwriter.WithMaxInflightRequests((*config).maxQueueRequests),
-		managedwriter.WithTraceID("FluentBitConnector"),
+		managedwriter.WithTraceID("FluentBit"),
 	)
 
 	streamSlice := *(*config).managedStreamSlice
