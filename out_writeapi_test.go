@@ -542,7 +542,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	}
 	defer func() { getClient = originalFunc }()
 
-	// returns mock message descriptor
+	// Returns mock message descriptor
 	testGetDescrip := func() (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto) {
 		table_schema := testTableSchema
 		descriptor, _ := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
@@ -552,7 +552,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		return messageDescriptor, dp
 	}
 
-	// mock managedstream
+	// Mock managedstream
 	md, _ := testGetDescrip()
 	mockMS := &MockManagedStream{
 		AppendRowsFunc: func(ctx context.Context, data [][]byte, opts ...managedwriter.AppendOption) (*managedwriter.AppendResult, error) {
@@ -586,7 +586,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		},
 	}
 
-	// returns mock managedstream
+	// Returns mock managedstream
 	origFunc := getWriter
 	getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
 		return mockMS, nil
@@ -604,10 +604,10 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	}
 	defer func() { setThreshold = patchSetThreshold }()
 
-	// calls init
+	// Calls init
 	initRes := FLBPluginInit(nil)
 
-	// begin mocking for flush call
+	// Begin mocking for flush call
 	orgFunc := getFLBPluginContext
 	getFLBPluginContext = func(ctx unsafe.Pointer) int {
 		return setID
@@ -633,7 +633,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	})
 	defer patchDecoder.Unpatch()
 
-	// sending rows and data
+	// Sending rows and data
 	var rowSent int = 0
 	var rowCount int = 5
 	patchRecord := monkey.Patch(output.GetRecord, func(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{}) {
@@ -652,7 +652,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	})
 	defer patchRecord.Unpatch()
 
-	// creates new stream with a mock build stream fucntion
+	// Creates new stream with a mock buildStream function to count the number of times we scale up
 	patchBuild := monkey.Patch(buildStream, func(ctx context.Context, config **outputConfig) error {
 		checks.buildStreamCalled++
 		currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
