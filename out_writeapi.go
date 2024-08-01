@@ -346,7 +346,7 @@ func getInstanceCount() int {
 }
 
 // Finds the stream index when dynamically scaling
-func getStreamIndex(streamSlice *[]*streamConfig) int {
+func getLeastLoadedStream(streamSlice *[]*streamConfig) int {
 	min := len(*(*streamSlice)[0].appendResults)
 	minStreamIndex := 0
 	for streamIndex, stream := range *streamSlice {
@@ -583,13 +583,14 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	streamSlice := config.managedStreamSlice
 
 	// checks responses for each stream using a loop
-	sliceLen := len(*streamSlice)
-	for i := 0; i < sliceLen; i++ {
+	for i := 0; i < len(*streamSlice); i++ {
 		checkResponses(ms_ctx, (*streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
 	// Gets stream with least values in queue
-	mostEfficient := getStreamIndex(config.managedStreamSlice)
+	config.mutex.Lock()
+	mostEfficient := getLeastLoadedStream(config.managedStreamSlice)
+	config.mutex.Unlock()
 
 	threshold := config.requestCountThreshold
 
@@ -617,6 +618,11 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	//keeps track of the number of rows previously sent
 	var rowCounter int64
 
+	// Find stream with least number of awaiting queue responses
+	config.mutex.Lock()
+	leastStreamIndex := getLeastLoadedStream(config.managedStreamSlice)
+	config.mutex.Unlock()
+
 	// Iterate Records
 	for {
 		// Extract Record
@@ -635,13 +641,12 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		} else {
 			//successful data transformation
 			if (currsize + len(buf)) >= config.maxChunkSize {
-				streamIndex := getStreamIndex(config.managedStreamSlice)
 				// Appending Rows
-				err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
+				err := sendRequest(ms_ctx, binaryData, &config, leastStreamIndex)
 				if err != nil {
 					log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				} else {
-					(*config.managedStreamSlice)[streamIndex].offsetCounter += rowCounter
+					(*config.managedStreamSlice)[leastStreamIndex].offsetCounter += rowCounter
 				}
 
 				rowCounter = 0
@@ -657,12 +662,11 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		}
 	}
 	// Appending Rows
-	streamIndex := getStreamIndex(config.managedStreamSlice)
-	err := sendRequest(ms_ctx, binaryData, &config, streamIndex)
+	err := sendRequest(ms_ctx, binaryData, &config, leastStreamIndex)
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
-		(*streamSlice)[streamIndex].offsetCounter += rowCounter
+		(*streamSlice)[leastStreamIndex].offsetCounter += rowCounter
 	}
 
 	return output.FLB_OK
