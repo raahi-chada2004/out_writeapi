@@ -72,8 +72,9 @@ Here is an example of an `OUTPUT` section:
     Max_Chunk_Size                     1048576
     Max_Queue_Requests                 100
     Max_Queue_Bytes                    52428800
-    Exactly_Once                       True
+    Exactly_Once                       False
     Num_Synchronous_Retries            4
+    DateTime_String_Type               True
 ```
 This establishes an output with the name `writeapi` which matches any input with a tag of `logfile*`. The match uses regex, so the input from above would lead to this output. The next three lines describe the destination table in BigQuery. The format relates to how the file should be parsed and the three lines after relate to how you want the stream to send data.
 
@@ -83,7 +84,31 @@ The `Exactly_Once` field takes in a boolean that describes whether exactly-once 
 
 The `Num_Synchronous_Retries` field takes in the maximum number of synchronous retries the plugin will attempt when streaming data with exactly once semantics. This field does not change the number of asynchronous retries attempted with at-least once/default semantics. The default number of synchronous retries with exactly-once delivery is 4.
 
+The `DateTime_String_Type` field takes in a boolean that describes whether the plugin will support DateTime string input data. When set to true, string literals will be accepted and when set to false, civil-time encoded int64 data will be accepted. Note that when this field is set, the input type applies for nested DataTime, as well (like a Record type with schema including DataTime). However, the plugin only supports int64 data for the Range<DataTime> BigQuery field regardless of the value set in the config file. More details about supported input data types for each BigQuery data type is below.
+
 Once the configuration file is set and the source is properly configured, the command `fluent-bit -c nameOfFile.conf` will start sending data to BigQuery.
+
+## Accepted Data Type for each BigQuery Field
+|BigQuery Data Type|Supported Input Data Type|
+|:----------------:|:-----------------------:|
+|BOOL              |bool                     |
+|BYTES             |bytes                    |
+|DATE              |int32                    |
+|DATETIME          |string or int64          |
+|FLOAT             |float64                  |
+|GEOGRAPHY         |string                   |
+|INTEGER           |int64                    |
+|JSON              |string                   |
+|NUMERIC           |string                   |
+|BIGNUMERIC        |string                   |
+|STRING            |string                   |
+|TIME              |string                   |
+|TIMESTAMP         |int64                    |
+|RANGE             |struct                   |
+|RECORD            |struct                   |
+
+Examples of sending each data type are included in integration_test.go \
+Encoding details can be found here: [BigQuery Write API Protobuf Data Type Conversions](https://cloud.google.com/bigquery/docs/write-api#data_type_conversions)
 
 ## Plugin Error Handling and Resilience
 The plugin is designed to log and handle both client-side and server-side errors, ensuring continuous and resilient data processing.
