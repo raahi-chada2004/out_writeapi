@@ -581,9 +581,12 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	}
 	// Holds stream slice for ease of use
 	streamSlice := config.managedStreamSlice
+	config.mutex.Lock()
+	sliceLen := len(*streamSlice)
+	config.mutex.Unlock()
 
 	// checks responses for each stream using a loop
-	for i := 0; i < len(*streamSlice); i++ {
+	for i := 0; i < sliceLen; i++ {
 		checkResponses(ms_ctx, (*streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
 	}
 
