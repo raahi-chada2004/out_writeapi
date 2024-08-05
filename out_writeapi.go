@@ -180,9 +180,10 @@ var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Conte
 // it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
 // and wait for the next response from WriteAPI
 // This function returns an int which is the length of the queue after being checked or -1 if there was some error.
-func checkResponses(curr_ctx context.Context, currQueuePointer *[]*managedwriter.AppendResult, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool, id int) int {
+func checkResponses(curr_ctx context.Context, streamSlice *[]*streamConfig, waitForResponse bool, currMutex *sync.Mutex, exactlyOnceConf bool, id int, streamIndex int) int {
 	(*currMutex).Lock()
 	defer (*currMutex).Unlock()
+	currQueuePointer := (*streamSlice)[streamIndex].appendResults
 	for len(*currQueuePointer) > 0 {
 		if exactlyOnceConf {
 			log.Printf("Asynchronous response queue has non-zero size when exactly-once is configured")
@@ -587,12 +588,14 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	// checks responses for each stream using a loop
 	for i := 0; i < sliceLen; i++ {
-		checkResponses(ms_ctx, (*streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
+		// TODO: Figure out mutex
+		checkResponses(ms_ctx, streamSlice, false, &config.mutex, config.exactlyOnce, id, i)
 	}
 
 	// Gets stream with least values in queue
 	config.mutex.Lock()
 	mostEfficient := getLeastLoadedStream(config.managedStreamSlice)
+	mostEfficientQueueLength := len(*(*streamSlice)[mostEfficient].appendResults)
 	config.mutex.Unlock()
 
 	threshold := config.requestCountThreshold
@@ -602,9 +605,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		offsetCounter: 0,
 		appendResults: &newResQueue,
 	}
-	config.mutex.Lock()
-	mostEfficientQueueLength := len(*(*streamSlice)[mostEfficient].appendResults)
-	config.mutex.Unlock()
+
 	if mostEfficientQueueLength > threshold {
 		config.mutex.Lock()
 		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
@@ -628,6 +629,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	// Find stream with least number of awaiting queue responses
 	config.mutex.Lock()
 	leastLoadedStreamIndex := getLeastLoadedStream(config.managedStreamSlice)
+	leastLoadedStream := (*streamSlice)[leastLoadedStreamIndex]
 	config.mutex.Unlock()
 
 	// Iterate Records
@@ -653,7 +655,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 				if err != nil {
 					log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 				} else {
-					(*config.managedStreamSlice)[leastLoadedStreamIndex].offsetCounter += rowCounter
+					config.mutex.Lock()
+					leastLoadedStream.offsetCounter += rowCounter
+					config.mutex.Unlock()
 				}
 
 				rowCounter = 0
@@ -674,7 +678,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
 		config.mutex.Lock()
-		(*streamSlice)[leastLoadedStreamIndex].offsetCounter += rowCounter
+		(*config.managedStreamSlice)[leastLoadedStreamIndex].offsetCounter += rowCounter
 		config.mutex.Unlock()
 	}
 
@@ -698,21 +702,21 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		log.Printf("Finding configuration for output instance with id: %d failed in FLBPluginExitCtx", id)
 		return output.FLB_ERROR
 	}
-	streamSlice := *config.managedStreamSlice
+	streamSlice := config.managedStreamSlice
 
-	sliceLen := len(streamSlice)
+	sliceLen := len(*streamSlice)
 	// Var to flag whether there was an error
 	errFlag := false
 	for i := 0; i < sliceLen; i++ {
-		checkResponses(ms_ctx, (streamSlice)[i].appendResults, false, &config.mutex, config.exactlyOnce, id)
+		checkResponses(ms_ctx, streamSlice, false, &config.mutex, config.exactlyOnce, id, i)
 
-		if streamSlice[i].managedstream != nil {
+		if (*streamSlice)[i].managedstream != nil {
 			if config.exactlyOnce {
-				if _, err := streamSlice[i].managedstream.Finalize(ms_ctx); err != nil {
+				if _, err := (*streamSlice)[i].managedstream.Finalize(ms_ctx); err != nil {
 					log.Printf("Finalizing managed stream for output instance with id %d and stream index %d failed in FLBPluginExit: %s", id, i, err)
 				}
 			}
-			if err := streamSlice[i].managedstream.Close(); err != nil {
+			if err := (*streamSlice)[i].managedstream.Close(); err != nil {
 				log.Printf("Closing managed stream for output instance with id %d and stream index %d failed in FLBPluginExitCtx: %s", id, i, err)
 				errFlag = true
 			}
