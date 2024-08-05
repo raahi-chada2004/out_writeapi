@@ -588,7 +588,6 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 	// checks responses for each stream using a loop
 	for i := 0; i < sliceLen; i++ {
-		// TODO: Figure out mutex
 		checkResponses(ms_ctx, streamSlice, false, &config.mutex, config.exactlyOnce, id, i)
 	}
 
@@ -678,7 +677,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
 		config.mutex.Lock()
-		(*config.managedStreamSlice)[leastLoadedStreamIndex].offsetCounter += rowCounter
+		leastLoadedStream.offsetCounter += rowCounter
 		config.mutex.Unlock()
 	}
 
