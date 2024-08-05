@@ -77,19 +77,19 @@ func TestPipeline(t *testing.T) {
 	// Start Fluent Bit with the config file
 	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
-		closeClientFatal(client, t, "Failed to start Fluent Bit: %v", err)
+		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
 	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateAllDataTypes(numRows); err != nil {
-		closeClientFatal(client, t, "Failed to generate data: %v", err)
+		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
 
 	// Stop Fluent Bit
 	if err := FBcmd.Process.Kill(); err != nil {
-		closeClientFatal(client, t, "Failed to stop Fluent Bit: %v", err)
+		t.Fatalf("Failed to stop Fluent Bit: %v", err)
 	}
 
 	// Verify data in BigQuery by querying
@@ -97,7 +97,7 @@ func TestPipeline(t *testing.T) {
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
-		closeClientFatal(client, t, "Failed to query data information BigQuery: %v", err)
+		t.Fatalf("Failed to query data information BigQuery: %v", err)
 	}
 
 	rowCount := 0
@@ -109,7 +109,7 @@ func TestPipeline(t *testing.T) {
 			break
 		}
 		if err != nil {
-			closeClientFatal(client, t, "Failed to read query results: %v", err)
+			t.Fatalf("Failed to read query results: %v", err)
 		}
 		// Verify size of the data
 		assert.Equal(t, len(BQvalues), reflect.TypeOf(log_entry_alltypes{}).NumField())
@@ -138,7 +138,7 @@ func TestPipeline(t *testing.T) {
 	assert.Equal(t, numRows, rowCount)
 
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
-	cleanUpBQDatasetAndFiles(ctx, t, dataset, client)
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
 // Integration test validates the exactly-once functionality
@@ -159,19 +159,19 @@ func TestExactlyOnce(t *testing.T) {
 	// Start Fluent Bit with the config file
 	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
-		closeClientFatal(client, t, "Failed to start Fluent Bit: %v", err)
+		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
 	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, (2 * time.Second), false); err != nil {
-		closeClientFatal(client, t, "Failed to generate data: %v", err)
+		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
 
 	// Stop Fluent Bit
 	if err := FBcmd.Process.Kill(); err != nil {
-		closeClientFatal(client, t, "Failed to stop Fluent Bit: %v", err)
+		t.Fatalf("Failed to stop Fluent Bit: %v", err)
 	}
 
 	// Verify data in BigQuery by querying
@@ -179,7 +179,7 @@ func TestExactlyOnce(t *testing.T) {
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
-		closeClientFatal(client, t, "Failed to query data information BigQuery: %v", err)
+		t.Fatalf("Failed to query data information BigQuery: %v", err)
 	}
 
 	rowCount := 0
@@ -191,7 +191,7 @@ func TestExactlyOnce(t *testing.T) {
 			break
 		}
 		if err != nil {
-			closeClientFatal(client, t, "Failed to read query results: %v", err)
+			t.Fatalf("Failed to read query results: %v", err)
 		}
 
 		assert.Equal(t, "hello world", BQvalues[0])
@@ -202,7 +202,7 @@ func TestExactlyOnce(t *testing.T) {
 	assert.Equal(t, numRows, rowCount)
 
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
-	cleanUpBQDatasetAndFiles(ctx, t, dataset, client)
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
 // This test validates that if a single row that cannot be transformed to binary is sent (with default semantics), the rest of the batch will not be dropped
@@ -225,19 +225,19 @@ func TestErrorHandlingDefault(t *testing.T) {
 	// Start Fluent Bit with the config file
 	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
-		closeClientFatal(client, t, "Failed to start Fluent Bit: %v", err)
+		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
 	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, 500*time.Millisecond, true); err != nil {
-		closeClientFatal(client, t, "Failed to generate data: %v", err)
+		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
 
 	// Stop Fluent Bit
 	if err := FBcmd.Process.Kill(); err != nil {
-		closeClientFatal(client, t, "Failed to stop Fluent Bit: %v", err)
+		t.Fatalf("Failed to stop Fluent Bit: %v", err)
 	}
 
 	// Verify data in BigQuery by querying
@@ -245,7 +245,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
-		closeClientFatal(client, t, "Failed to query data information BigQuery: %v", err)
+		t.Fatalf("Failed to query data information BigQuery: %v", err)
 	}
 
 	rowCount := 0
@@ -257,7 +257,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 			break
 		}
 		if err != nil {
-			closeClientFatal(client, t, "Failed to read query results: %v", err)
+			t.Fatalf("Failed to read query results: %v", err)
 		}
 
 		assert.Equal(t, "hello world", BQvalues[0])
@@ -268,7 +268,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 	assert.Equal(t, numGoodRows, rowCount)
 
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
-	cleanUpBQDatasetAndFiles(ctx, t, dataset, client)
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
 // This test validates that if a single row that cannot be transformed to binary is sent (with exactly-once semantics), the rest of the batch will not be dropped
@@ -291,19 +291,19 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 	// Start Fluent Bit with the config file
 	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
-		closeClientFatal(client, t, "Failed to start Fluent Bit: %v", err)
+		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
 	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, (500 * time.Millisecond), true); err != nil {
-		closeClientFatal(client, t, "Failed to generate data: %v", err)
+		t.Fatalf("Failed to generate data: %v", err)
 	}
 	time.Sleep(2 * time.Second)
 
 	// Stop Fluent Bit
 	if err := FBcmd.Process.Kill(); err != nil {
-		closeClientFatal(client, t, "Failed to stop Fluent Bit: %v", err)
+		t.Fatalf("Failed to stop Fluent Bit: %v", err)
 	}
 
 	// Verify data in BigQuery by querying
@@ -311,7 +311,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
-		closeClientFatal(client, t, "Failed to query data information BigQuery: %v", err)
+		t.Fatalf("Failed to query data information BigQuery: %v", err)
 	}
 
 	rowCount := 0
@@ -323,7 +323,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 			break
 		}
 		if err != nil {
-			closeClientFatal(client, t, "Failed to read query results: %v", err)
+			t.Fatalf("Failed to read query results: %v", err)
 		}
 
 		assert.Equal(t, "hello world", BQvalues[0])
@@ -334,7 +334,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 	assert.Equal(t, numGoodRows, rowCount)
 
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
-	cleanUpBQDatasetAndFiles(ctx, t, dataset, client)
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
 // This function closes to the BigQuery client and sends a fatal error
@@ -392,20 +392,20 @@ func setupBQTableAndFiles(ctx context.Context, t *testing.T, tableSchema bigquer
 }
 
 // This function deletes the BigQuery dataset, config file, and log file
-func cleanUpBQDatasetAndFiles(ctx context.Context, t *testing.T, dataset *bigquery.Dataset, client *bigquery.Client) {
+func cleanUpBQDatasetAndFiles(ctx context.Context, t *testing.T, dataset *bigquery.Dataset) {
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
 	if err := dataset.DeleteWithContents(ctx); err != nil {
-		closeClientFatal(client, t, "Failed to delete BigQuery dataset and table: %v", err)
+		t.Fatalf("Failed to delete BigQuery dataset and table: %v", err)
 	}
 
 	// Clean up - delete the log file
 	if err := os.Remove(logFilePath); err != nil {
-		closeClientFatal(client, t, "Failed to delete log file: %v", err)
+		t.Fatalf("Failed to delete log file: %v", err)
 	}
 
 	// Clean up - delete the config file
 	if err := os.Remove(configFilePath); err != nil {
-		closeClientFatal(client, t, "Failed to delete config log file: %v", err)
+		t.Fatalf("Failed to delete config log file: %v", err)
 	}
 }
 
