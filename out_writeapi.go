@@ -603,7 +603,10 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		appendResults: &newResQueue,
 	}
 	config.mutex.Lock()
-	if len(*(*streamSlice)[mostEfficient].appendResults) > threshold {
+	mostEfficientQueueLength := len(*(*streamSlice)[mostEfficient].appendResults)
+	config.mutex.Unlock()
+	if mostEfficientQueueLength > threshold {
+		config.mutex.Lock()
 		*config.managedStreamSlice = append(*config.managedStreamSlice, &newStream)
 		newStreamIndex := len(*config.managedStreamSlice) - 1
 		err := buildStream(ms_ctx, &config, newStreamIndex)
@@ -670,7 +673,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	if err != nil {
 		log.Printf("Appending data for output instance with id: %d failed in FLBPluginFlushCtx: %s", id, err)
 	} else {
+		config.mutex.Lock()
 		(*streamSlice)[leastLoadedStreamIndex].offsetCounter += rowCounter
+		config.mutex.Unlock()
 	}
 
 	return output.FLB_OK
