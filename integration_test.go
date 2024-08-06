@@ -35,37 +35,17 @@ import (
 const (
 	logFileName    = "logfile.log"
 	logFilePath    = "./" + logFileName
-	configFilePath = "./fluent-bit.conf"
+	configFileName = "fluent-bit.conf"
+	configFilePath = "./" + configFileName
 	numRows        = 10
 )
 
 // Integration test validates the end-to-end fluentbit and bigquery pipeline with all bigquery fields
 // Data is inputted based on documentation (constraints for each field included there)
 func TestPipeline(t *testing.T) {
-
 	ctx := context.Background()
 
-	//get projectID from environment
-	projectID := os.Getenv("ProjectID")
-	if projectID == "" {
-		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
-	}
-
-	// Set up BigQuery client
-	client, err := bigquery.NewClient(ctx, projectID)
-	if err != nil {
-		t.Fatalf("Failed to create BigQuery client: %v", err)
-	}
-	defer client.Close()
-
-	// Create a random dataset and table name
-	datasetHash := randString()
-	datasetID := "testdataset_" + datasetHash
-
-	tableHash := randString()
-	tableID := "testtable_" + tableHash
-
-	// Create BigQuery dataset and table in an existing project
+	// Define schema of relevant BigQuery Table
 	tableSchema := bigquery.Schema{
 		{Name: "StringField", Type: bigquery.StringFieldType},
 		{Name: "BytesField", Type: bigquery.BytesFieldType},
@@ -87,34 +67,20 @@ func TestPipeline(t *testing.T) {
 		{Name: "RangeField", Type: bigquery.RangeFieldType, RangeElementType: &bigquery.RangeElementType{Type: bigquery.DateTimeFieldType}},
 		{Name: "JSONField", Type: bigquery.JSONFieldType},
 	}
-	dataset := client.Dataset(datasetID)
-	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
-		t.Fatalf("Failed to create BigQuery dataset %v", err)
-	}
-	table := dataset.Table(tableID)
-	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
-		t.Fatalf("Failed to create BigQuery table: %v", err)
-	}
 
-	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "false"); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
-	}
-
-	// Create log file
-	file, err := os.Create(logFilePath)
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
+	// Set up bigquery client and create dataset & table within existing project
+	// Create config file with relevant parameters & create log file
+	client, dataset, fullTableID, file := setupBQTableAndFiles(ctx, t, tableSchema, "false")
+	defer client.Close()
 	defer file.Close()
 
 	// Start Fluent Bit with the config file
-	FBcmd := exec.Command("fluent-bit", "-c", "fluent-bit.conf")
+	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
 		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
-	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
+	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateAllDataTypes(numRows); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
@@ -127,7 +93,7 @@ func TestPipeline(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT * FROM `" + projectID + "." + datasetID + "." + tableID + "`"
+	queryMsg := "SELECT * FROM `" + fullTableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -171,79 +137,32 @@ func TestPipeline(t *testing.T) {
 	// Verify the number of rows
 	assert.Equal(t, numRows, rowCount)
 
-	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
-	if err := dataset.DeleteWithContents(ctx); err != nil {
-		t.Fatalf("Failed to delete BigQuery table: %v", err)
-	}
-
-	// Clean up - delete the log file
-	if err := os.Remove(logFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
-
-	// Clean up - delete the config file
-	if err := os.Remove(configFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
+	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
-// integration test validates the exactly-once functionality
+// Integration test validates the exactly-once functionality
 func TestExactlyOnce(t *testing.T) {
-
 	ctx := context.Background()
 
-	//get projectID from environment
-	projectID := os.Getenv("ProjectID")
-	if projectID == "" {
-		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
-	}
-
-	// Set up BigQuery client
-	client, err := bigquery.NewClient(ctx, projectID)
-	if err != nil {
-		t.Fatalf("Failed to create BigQuery client: %v", err)
-	}
-	defer client.Close()
-
-	// Create a random dataset and table name
-	datasetHash := randString()
-	datasetID := "testdataset_" + datasetHash
-
-	tableHash := randString()
-	tableID := "testtable_" + tableHash
-
-	// Create BigQuery dataset and table in an existing project
+	// Define schema of relevant BigQuery table
 	tableSchema := bigquery.Schema{
 		{Name: "Message", Type: bigquery.StringFieldType},
 	}
-	dataset := client.Dataset(datasetID)
-	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
-		t.Fatalf("Failed to create BigQuery dataset %v", err)
-	}
-	table := dataset.Table(tableID)
-	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
-		t.Fatalf("Failed to create BigQuery table: %v", err)
-	}
 
-	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "true"); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
-	}
-
-	// Create log file
-	file, err := os.Create(logFilePath)
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
+	// Set up bigquery client and create dataset & table within existing project
+	// Create config file with relevant parameters & create log file
+	client, dataset, fullTableID, file := setupBQTableAndFiles(ctx, t, tableSchema, "true")
+	defer client.Close()
 	defer file.Close()
 
 	// Start Fluent Bit with the config file
-	FBcmd := exec.Command("fluent-bit", "-c", "fluent-bit.conf")
+	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
 		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
-	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
+	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, (2 * time.Second), false); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
@@ -256,7 +175,7 @@ func TestExactlyOnce(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT Message FROM `" + projectID + "." + datasetID + "." + tableID + "`"
+	queryMsg := "SELECT Message FROM `" + fullTableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -265,7 +184,7 @@ func TestExactlyOnce(t *testing.T) {
 
 	rowCount := 0
 	for {
-		//Check that the data sent is correct
+		// Check that the data sent is correct
 		var BQvalues []bigquery.Value
 		err := BQdata.Next(&BQvalues)
 		if err == iterator.Done {
@@ -282,80 +201,34 @@ func TestExactlyOnce(t *testing.T) {
 	// Verify the number of rows
 	assert.Equal(t, numRows, rowCount)
 
-	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
-	if err := dataset.DeleteWithContents(ctx); err != nil {
-		t.Fatalf("Failed to delete BigQuery table: %v", err)
-	}
-
-	// Clean up - delete the log file
-	if err := os.Remove(logFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
-
-	// Clean up - delete the config file
-	if err := os.Remove(configFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
+	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
-// this test validates that if a single row that cannot be transformed to binary is sent (with default semantics), the rest of the batch will not be dropped
+// This test validates that if a single row that cannot be transformed to binary is sent (with default semantics), the rest of the batch will not be dropped
 func TestErrorHandlingDefault(t *testing.T) {
 	const numGoodRows = 8
 
 	ctx := context.Background()
 
-	//get projectID from environment
-	projectID := os.Getenv("ProjectID")
-	if projectID == "" {
-		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
-	}
-
-	// Set up BigQuery client
-	client, err := bigquery.NewClient(ctx, projectID)
-	if err != nil {
-		t.Fatalf("Failed to create BigQuery client: %v", err)
-	}
-	defer client.Close()
-
-	// Create a random dataset and table name
-	datasetHash := randString()
-	datasetID := "testdataset_" + datasetHash
-
-	tableHash := randString()
-	tableID := "testtable_" + tableHash
-
-	// Create BigQuery dataset and table in an existing project
+	// Define schema of relevant BigQuery table
 	tableSchema := bigquery.Schema{
 		{Name: "Message", Type: bigquery.StringFieldType},
 	}
-	dataset := client.Dataset(datasetID)
-	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
-		t.Fatalf("Failed to create BigQuery dataset %v", err)
-	}
-	table := dataset.Table(tableID)
-	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
-		t.Fatalf("Failed to create BigQuery table: %v", err)
-	}
 
-	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "false"); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
-	}
-
-	// Create log file
-	file, err := os.Create(logFilePath)
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
+	// Set up bigquery client and create dataset & table within existing project
+	// Create config file with relevant parameters & create log file
+	client, dataset, fullTableID, file := setupBQTableAndFiles(ctx, t, tableSchema, "false")
+	defer client.Close()
 	defer file.Close()
 
 	// Start Fluent Bit with the config file
-	FBcmd := exec.Command("fluent-bit", "-c", "fluent-bit.conf")
+	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
 		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
 
-	//Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
+	// Wait for fluent-bit connection to generate data; add delays before ending fluent-bit process
 	time.Sleep(2 * time.Second)
 	if err := generateData(numRows, 500*time.Millisecond, true); err != nil {
 		t.Fatalf("Failed to generate data: %v", err)
@@ -368,7 +241,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT Message FROM `" + projectID + "." + datasetID + "." + tableID + "`"
+	queryMsg := "SELECT Message FROM `" + fullTableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -377,7 +250,7 @@ func TestErrorHandlingDefault(t *testing.T) {
 
 	rowCount := 0
 	for {
-		//Check that the data sent is correct
+		// Check that the data sent is correct
 		var BQvalues []bigquery.Value
 		err := BQdata.Next(&BQvalues)
 		if err == iterator.Done {
@@ -394,75 +267,29 @@ func TestErrorHandlingDefault(t *testing.T) {
 	// Verify the number of rows
 	assert.Equal(t, numGoodRows, rowCount)
 
-	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
-	if err := dataset.DeleteWithContents(ctx); err != nil {
-		t.Fatalf("Failed to delete BigQuery table: %v", err)
-	}
-
-	// Clean up - delete the log file
-	if err := os.Remove(logFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
-
-	// Clean up - delete the config file
-	if err := os.Remove(configFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
-	}
+	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
 }
 
-// this test validates that if a single row that cannot be transformed to binary is sent (with exactly-once semantics), the rest of the batch will not be dropped
+// This test validates that if a single row that cannot be transformed to binary is sent (with exactly-once semantics), the rest of the batch will not be dropped
 func TestErrorHandlingExactlyOnce(t *testing.T) {
 	const numGoodRows = 8
 
 	ctx := context.Background()
 
-	//get projectID from environment
-	projectID := os.Getenv("ProjectID")
-	if projectID == "" {
-		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
-	}
-
-	// Set up BigQuery client
-	client, err := bigquery.NewClient(ctx, projectID)
-	if err != nil {
-		t.Fatalf("Failed to create BigQuery client: %v", err)
-	}
-	defer client.Close()
-
-	// Create a random dataset and table name
-	datasetHash := randString()
-	datasetID := "testdataset_" + datasetHash
-
-	tableHash := randString()
-	tableID := "testtable_" + tableHash
-
-	// Create BigQuery dataset and table in an existing project
+	// Define schema of relevant BigQuery table
 	tableSchema := bigquery.Schema{
 		{Name: "Message", Type: bigquery.StringFieldType},
 	}
-	dataset := client.Dataset(datasetID)
-	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
-		t.Fatalf("Failed to create BigQuery dataset %v", err)
-	}
-	table := dataset.Table(tableID)
-	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
-		t.Fatalf("Failed to create BigQuery table: %v", err)
-	}
 
-	//Create config file with random table name
-	if err := createConfigFile(projectID, datasetID, tableID, "true"); err != nil {
-		t.Fatalf("failed to create config file: %v", err)
-	}
-
-	// Create log file
-	file, err := os.Create(logFilePath)
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
+	// Set up bigquery client and create dataset & table within existing project
+	// Create config file with relevant parameters & create log file
+	client, dataset, fullTableID, file := setupBQTableAndFiles(ctx, t, tableSchema, "true")
+	defer client.Close()
 	defer file.Close()
 
 	// Start Fluent Bit with the config file
-	FBcmd := exec.Command("fluent-bit", "-c", "fluent-bit.conf")
+	FBcmd := exec.Command("fluent-bit", "-c", configFileName)
 	if err := FBcmd.Start(); err != nil {
 		t.Fatalf("Failed to start Fluent Bit: %v", err)
 	}
@@ -480,7 +307,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 	}
 
 	// Verify data in BigQuery by querying
-	queryMsg := "SELECT Message FROM `" + projectID + "." + datasetID + "." + tableID + "`"
+	queryMsg := "SELECT Message FROM `" + fullTableID + "`"
 	BQquery := client.Query(queryMsg)
 	BQdata, err := BQquery.Read(ctx)
 	if err != nil {
@@ -489,7 +316,7 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 
 	rowCount := 0
 	for {
-		//Check that the data sent is correct
+		// Check that the data sent is correct
 		var BQvalues []bigquery.Value
 		err := BQdata.Next(&BQvalues)
 		if err == iterator.Done {
@@ -506,9 +333,69 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 	// Verify the number of rows
 	assert.Equal(t, numGoodRows, rowCount)
 
+	// Clean up - delete the BigQuery dataset and its contents(includes generated table) as well as config & log files
+	cleanUpBQDatasetAndFiles(ctx, t, dataset)
+}
+
+// This function closes to the BigQuery client and sends a fatal error
+func closeClientFatal(client *bigquery.Client, t *testing.T, message string, args ...any) {
+	client.Close()
+	t.Fatalf(message, args...)
+}
+
+// This function sets up the BigQuery client, and creates a dataset and table in an existing project
+// The configuration file and log file are also created
+func setupBQTableAndFiles(ctx context.Context, t *testing.T, tableSchema bigquery.Schema, exactlyOnceVal string) (*bigquery.Client, *bigquery.Dataset, string, *os.File) {
+	// Get projectID from environment
+	projectID := os.Getenv("ProjectID")
+	if projectID == "" {
+		t.Fatal("Environment variable 'ProjectID' is required to run this test, but not set currently")
+	}
+
+	// Set up BigQuery client
+	client, err := bigquery.NewClient(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Failed to create BigQuery client: %v", err)
+	}
+
+	// Create a random dataset and table name
+	datasetHash := randString()
+	datasetID := "testdataset_" + datasetHash
+
+	tableHash := randString()
+	tableID := "testtable_" + tableHash
+
+	// Create BigQuery dataset and table in an existing project
+	dataset := client.Dataset(datasetID)
+	if err := dataset.Create(ctx, &bigquery.DatasetMetadata{Location: "US"}); err != nil {
+		closeClientFatal(client, t, "Failed to create BigQuery dataset %v", err)
+	}
+	table := dataset.Table(tableID)
+	if err := table.Create(ctx, &bigquery.TableMetadata{Schema: tableSchema}); err != nil {
+		closeClientFatal(client, t, "Failed to create BigQuery table %v", err)
+	}
+
+	// Create config file with random table name and relevant exactlyOnce parameter
+	if err := createConfigFile(projectID, datasetID, tableID, exactlyOnceVal); err != nil {
+		closeClientFatal(client, t, "Failed to create config file %v", err)
+	}
+
+	// Create log file
+	file, err := os.Create(logFilePath)
+	if err != nil {
+		closeClientFatal(client, t, "Failed to create log file %v", err)
+	}
+
+	// Return client, dataset, and full tableID
+	return client, dataset, (projectID + "." + datasetID + "." + tableID), file
+
+}
+
+// This function deletes the BigQuery dataset, config file, and log file
+func cleanUpBQDatasetAndFiles(ctx context.Context, t *testing.T, dataset *bigquery.Dataset) {
 	// Clean up - delete the BigQuery dataset and its contents(includes generated table)
 	if err := dataset.DeleteWithContents(ctx); err != nil {
-		t.Fatalf("Failed to delete BigQuery table: %v", err)
+		t.Fatalf("Failed to delete BigQuery dataset and table: %v", err)
 	}
 
 	// Clean up - delete the log file
@@ -518,11 +405,11 @@ func TestErrorHandlingExactlyOnce(t *testing.T) {
 
 	// Clean up - delete the config file
 	if err := os.Remove(configFilePath); err != nil {
-		t.Fatalf("Failed to delete log file: %v", err)
+		t.Fatalf("Failed to delete config log file: %v", err)
 	}
 }
 
-// generate a random string with length 10 (to act as a hash for the table name)
+// Generate a random string with length 10 (to act as a hash for the table name)
 func randString() string {
 	source := rand.NewSource(time.Now().UnixNano())
 	rng := rand.New(source)
@@ -534,7 +421,7 @@ func randString() string {
 	return string(str)
 }
 
-// template for the config file - dynamically update TableId field
+// Template for the config file - dynamically update TableId field
 const configTemplate = `
 [SERVICE]
     Daemon          off
@@ -557,7 +444,7 @@ const configTemplate = `
     Exactly_Once                       {{.CurrExactlyOnce}}
 `
 
-// struct for dynamically updating config file
+// Struct for dynamically updating config file
 type Config struct {
 	CurrLogfilePath string
 	CurrProjectName string
@@ -584,7 +471,7 @@ func createConfigFile(currProjectID string, currDatasetID string, currTableID st
 	}
 
 	// Create the new file
-	file, err := os.Create("./fluent-bit.conf")
+	file, err := os.Create(configFilePath)
 	if err != nil {
 		return err
 	}
@@ -594,28 +481,28 @@ func createConfigFile(currProjectID string, currDatasetID string, currTableID st
 	return tmpl.Execute(file, config)
 }
 
-//Log entry template (corresponding to BQ table schema)
+// Log entry template (corresponding to BQ table schema)
 
 type log_entry struct {
 	Message string `json:"Message"`
 }
 
-// data generation function
+// Data generation function
 func generateData(numRows int, sleepTime time.Duration, sendBadRow bool) error {
-	//open file
+	// Open file
 	file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	logger := log.New(file, "", 0)
 	if err != nil {
 		return err
 	}
 
-	//send json marshalled data
+	// Send json marshalled data
 	for i := 1; i <= numRows; i++ {
 		curr := log_entry{
 			Message: "hello world",
 		}
 		entry, err := json.Marshal(curr)
-		//comparing counter to mod 5 in order to send 2 bad rows of data
+		// Comparing counter to mod 5 in order to send 2 bad rows of data
 		if sendBadRow && ((i % 5) == 0) {
 			entry, err = json.Marshal("Bad data entry")
 		}
