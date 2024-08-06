@@ -327,8 +327,7 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
-	streamSlice := *(*config).managedStreamSlice
-	currStream := streamSlice[streamIndex]
+	currStream := (*(*config).managedStreamSlice)[streamIndex]
 
 	appendResult, err := currStream.managedstream.AppendRows(ctx, data)
 	if err != nil {
@@ -390,8 +389,7 @@ var setThreshold = func(maxQueueSize int) int {
 func createNewStreamDynamicScaling(config **outputConfig) {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
-	sliceLen := len(*(*config).managedStreamSlice)
-	if sliceLen < maxNumStreamsPerInstance {
+	if len(*(*config).managedStreamSlice) < maxNumStreamsPerInstance {
 		// Gets stream with least values in queue
 		mostEfficient := getLeastLoadedStream((*config).managedStreamSlice)
 		mostEfficientQueueLength := len(*(*(*config).managedStreamSlice)[mostEfficient].appendResults)
@@ -485,9 +483,8 @@ func finalizeCloseAllStreams(config **outputConfig, id int) bool {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
 	errFlag := false
-	sliceLen := len(*(*config).managedStreamSlice)
 	streamSlice := (*config).managedStreamSlice
-	for i := 0; i < sliceLen; i++ {
+	for i := 0; i < len(*(*config).managedStreamSlice); i++ {
 		if (*streamSlice)[i].managedstream != nil {
 			if (*config).exactlyOnce {
 				if _, err := (*streamSlice)[i].managedstream.Finalize(ms_ctx); err != nil {
