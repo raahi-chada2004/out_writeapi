@@ -653,7 +653,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 	defer patchRecord.Unpatch()
 
 	// Creates new stream with a mock buildStream function to count the number of times we scale up
-	patchBuild := monkey.Patch(buildStream, func(ctx context.Context, config **outputConfig) error {
+	patchBuild := monkey.Patch(buildStream, func(ctx context.Context, config **outputConfig, streamIndex int) error {
 		checks.buildStreamCalled++
 		currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
 			managedwriter.WithType((*config).streamType),
@@ -666,8 +666,8 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		)
 
 		streamSlice := *(*config).managedStreamSlice
+
 		if err == nil {
-			streamIndex := len(streamSlice) - 1
 			(streamSlice)[streamIndex].managedstream = currManagedStream
 		}
 		return nil
