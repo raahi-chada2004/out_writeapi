@@ -79,6 +79,7 @@ const (
 	queueRequestScalingPercent = 0.8
 	numRetriesDefault          = 4
 	maxNumStreamsPerInstance   = 10
+	minQueueRequests           = 10
 )
 
 // This function handles getting data on the schema of the table data is being written to.
@@ -378,7 +379,7 @@ func getOffset(id int) int64 {
 // Method to determine threshold
 var setThreshold = func(maxQueueSize int) int {
 	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(maxQueueSize)))
-	if requestCountThreshold < 10 {
+	if requestCountThreshold < minQueueRequests {
 		requestCountThreshold = 10
 	}
 	return requestCountThreshold
@@ -407,6 +408,8 @@ func createNewStreamDynamicScaling(config **outputConfig) {
 			err := buildStream(ms_ctx, config, newStreamIndex)
 			if err != nil {
 				log.Printf("Creating an additional managed stream with destination table: %s failed in FLBPluginInit: %s", (*config).tableRef, err)
+				// If failure, failed stream is removed from slice
+				*(*config).managedStreamSlice = (*(*config).managedStreamSlice)[:newStreamIndex]
 			}
 
 		}
@@ -731,7 +734,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	}
 
 	// Runs checkResponses on each stream and then finalizes and closes it
-	// If there is an error it preserves the but continues to close and finalize all other streams
+	// If there is an error it preserves it and then continues to close and finalize all other streams
 	checkAllStreamResponses(ms_ctx, &config.managedStreamSlice, false, &config.mutex, config.exactlyOnce, id)
 	errFlag := finalizeCloseAllStreams(&config, id)
 
