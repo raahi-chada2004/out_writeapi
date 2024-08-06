@@ -379,7 +379,7 @@ func getOffset(id int) int64 {
 var setThreshold = func(maxQueueSize int) int {
 	requestCountThreshold := int(math.Floor(queueRequestScalingPercent * float64(maxQueueSize)))
 	if requestCountThreshold < minQueueRequests {
-		requestCountThreshold = 10
+		requestCountThreshold = minQueueRequests
 	}
 	return requestCountThreshold
 }
