@@ -492,6 +492,7 @@ func finalizeCloseAllStreams(config **outputConfig, id int) bool {
 			if (*config).exactlyOnce {
 				if _, err := (*streamSlice)[i].managedstream.Finalize(ms_ctx); err != nil {
 					log.Printf("Finalizing managed stream for output instance with id %d and stream index %d failed in FLBPluginExit: %s", id, i, err)
+					errFlag = true
 				}
 			}
 			if err := (*streamSlice)[i].managedstream.Close(); err != nil {
