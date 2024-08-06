@@ -209,7 +209,7 @@ func checkAllStreamResponses(ctx context.Context, streamSlice **[]*streamConfig,
 	defer (*currMutex).Unlock()
 	sliceLen := len(**streamSlice)
 	for i := 0; i < sliceLen; i++ {
-		checkResponses(ms_ctx, *streamSlice, false, exactlyOnceConf, id, i)
+		checkResponses(ctx, *streamSlice, waitForResponse, exactlyOnceConf, id, i)
 	}
 }
 
