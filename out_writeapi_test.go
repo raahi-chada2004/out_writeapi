@@ -33,14 +33,14 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// this is a mock struct describing the states of the plugin after being register
+// This is a mock struct describing the states of the plugin after being register
 type MockFLBPlugin struct {
 	name string
 	desc string
 }
 
-// this function mocks output.FLBPluginRegister by setting the fields of the MockFLBPlugin struct to the input parameter
-// and returning a 0 (to imply success)
+// This function mocks output.FLBPluginRegister by setting the fields of the MockFLBPlugin struct to the input parameter
+// And returning a 0 (to imply success)
 func (m *MockFLBPlugin) mockOutputRegister(def unsafe.Pointer, currname string, currdesc string) int {
 	m.name = currname
 	m.desc = currdesc
@@ -48,7 +48,7 @@ func (m *MockFLBPlugin) mockOutputRegister(def unsafe.Pointer, currname string, 
 	return 0
 }
 
-// this function tests FLBPluginRegister
+// This function tests FLBPluginRegister
 func TestFLBPluginRegister(t *testing.T) {
 	currplugin := &MockFLBPlugin{}
 
@@ -63,7 +63,7 @@ func TestFLBPluginRegister(t *testing.T) {
 
 }
 
-// this is a struct keeping track of whether the correct options are sent in NewManagedStream
+// This is a struct keeping track of whether the correct options are sent in NewManagedStream
 type OptionChecks struct {
 	configProjectID        bool
 	configDatasetID        bool
@@ -200,7 +200,7 @@ func TestFLBPluginInit(t *testing.T) {
 
 }
 
-// this test checks that all relevant functions are called in init when exactly once is set to true
+// This test checks that all relevant functions are called in init when exactly once is set to true
 func TestFLBPluginInitExactlyOnce(t *testing.T) {
 	var currChecks OptionChecks
 	mockClient := &MockManagedWriterClient{
@@ -477,8 +477,8 @@ func TestFLBPluginFlushCtx(t *testing.T) {
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
-	// number without having to manually change it. Each time flush is called, GetRecord is called for the
-	// number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
+	// Number without having to manually change it. Each time flush is called, GetRecord is called for the
+	// Number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
 	expectGotRecord := (rowCount + 1) * 2
 
 	assert.Equal(t, output.FLB_OK, initRes)
@@ -658,7 +658,7 @@ func TestFLBPluginFlushCtxDynamicScaling(t *testing.T) {
 		currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
 			managedwriter.WithType((*config).streamType),
 			managedwriter.WithDestinationTable((*config).tableRef),
-			//use the descriptor proto when creating the new managed stream
+			// Use the descriptor proto when creating the new managed stream
 			managedwriter.WithSchemaDescriptor((*config).schemaDesc),
 			managedwriter.EnableWriteRetries((*config).enableRetry),
 			managedwriter.WithMaxInflightBytes((*config).maxQueueBytes),
@@ -839,27 +839,27 @@ func TestFLBPluginFlushCtxExactlyOnce(t *testing.T) {
 
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
-	//expect the offset to equal the number of successful rows previously sent (with no server-side errors)
+	// Expect the offset to equal the number of successful rows previously sent (with no server-side errors)
 	assert.Equal(t, int64(rowCount), getOffset(setID))
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
 	assert.Equal(t, int64(2*rowCount), getOffset(setID))
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
-	// number without having to manually change it. Each time flush is called, GetRecord is called for the
-	// number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
+	// Number without having to manually change it. Each time flush is called, GetRecord is called for the
+	// Number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
 	expectGotRecord := (rowCount + 1) * 2
 
 	assert.Equal(t, output.FLB_OK, initRes)
 	assert.Equal(t, output.FLB_OK, result)
 	assert.Equal(t, 2, checks.appendRows)
 	assert.Equal(t, 2, checks.calledGetContext)
-	//since exactly once has synchronous response checking, getResults should be called for each flush call
+	// Since exactly once has synchronous response checking, getResults should be called for each flush call
 	assert.Equal(t, 2, checks.getResultsCount)
 	assert.Equal(t, 2, checks.createDecoder)
 	assert.Equal(t, expectGotRecord, checks.gotRecord)
 }
 
-// this function validates that the offset is not incremented when a server-side error occurs
+// This function validates that the offset is not incremented when a server-side error occurs
 func TestFLBPluginFlushCtxErrorHandling(t *testing.T) {
 	checks := new(StreamChecks)
 	var setID int
@@ -976,7 +976,7 @@ func TestFLBPluginFlushCtxErrorHandling(t *testing.T) {
 	pluginGetResult = func(queueHead *managedwriter.AppendResult, ctx context.Context) (int64, error) {
 		checks.getResultsCount++
 		i++
-		//send a server-side error for every other request
+		// Send a server-side error for every other request
 		if i%2 == 0 {
 			return -1, nil
 		} else {
@@ -1017,15 +1017,15 @@ func TestFLBPluginFlushCtxErrorHandling(t *testing.T) {
 
 	// Calls FlushCtx with this ID
 	result := FLBPluginFlushCtx(pointerValue, nil, 0, nil)
-	//expect the offset not to increase due to mocked server-side error
+	// Expect the offset not to increase due to mocked server-side error
 	assert.Equal(t, int64(0), getOffset(setID))
 	result = FLBPluginFlushCtx(pointerValue, nil, 0, nil)
-	//expect the offset to increase since no error was retured from pluginGetResult
+	// Expect the offset to increase since no error was retured from pluginGetResult
 	assert.Equal(t, int64(rowCount), getOffset(setID))
 
 	// If we change number of rows, the number of times GetRecord is called changes. This finds the expected
-	// number without having to manually change it. Each time flush is called, GetRecord is called for the
-	// number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
+	// Number without having to manually change it. Each time flush is called, GetRecord is called for the
+	// Number of rows plus once to break the loop. Since flush is called twice, we multiply this by 2
 	expectGotRecord := (rowCount + 1) * 2
 
 	assert.Equal(t, output.FLB_OK, initRes)
