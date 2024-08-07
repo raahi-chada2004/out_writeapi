@@ -118,37 +118,37 @@ func mangleInputSchema(input *storagepb.TableSchema, dataTimeString bool) *stora
 }
 
 // This function handles getting data on the schema of the table data is being written to.
-// The getDescriptors function returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
+// getDescriptors returns the message descriptor (which describes the schema of the corresponding table) as well as a descriptor proto
 func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, project string, dataset string, table string, dataTimeString bool) (protoreflect.MessageDescriptor, *descriptorpb.DescriptorProto, error) {
-	// Create streamID specific to the project, dataset, and table
+	//create streamID specific to the project, dataset, and table
 	curr_stream := fmt.Sprintf("projects/%s/datasets/%s/tables/%s/streams/_default", project, dataset, table)
 
-	// Create the getwritestreamrequest to have View_FULL so that the schema can be obtained
+	//create the getwritestreamrequest to have View_FULL so that the schema can be obtained
 	req := storagepb.GetWriteStreamRequest{
 		Name: curr_stream,
 		View: storagepb.WriteStreamView_FULL,
 	}
 
-	// Call getwritestream to get data on the table
+	//call getwritestream to get data on the table
 	table_data, err := mw_client.GetWriteStream(curr_ctx, &req)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Get the schema from table data
+	//get the schema from table data
 	init_table_schema := table_data.GetTableSchema()
 	table_schema := mangleInputSchema(init_table_schema, dataTimeString)
-	// Storage schema -> proto descriptor
+	//storage schema ->proto descriptor
 	descriptor, err := adapt.StorageSchemaToProto2Descriptor(table_schema, "root")
 	if err != nil {
 		return nil, nil, err
 	}
-	// Proto descriptor -> message descriptor
+	//proto descriptor -> messageDescriptor
 	messageDescriptor, ok := descriptor.(protoreflect.MessageDescriptor)
 	if !ok {
 		return nil, nil, errors.New("Message descriptor could not be created from table's proto descriptor")
 	}
 
-	// Message descriptor -> descriptor proto
+	//messageDescriptor -> descriptor proto
 	dp, err := adapt.NormalizeDescriptor(messageDescriptor)
 	if err != nil {
 		return nil, nil, err
@@ -158,17 +158,17 @@ func getDescriptors(curr_ctx context.Context, mw_client ManagedWriterClient, pro
 }
 
 // This function handles the data transformation from JSON to binary for a single json row.
-// The outputs of this function are the corresponding binary data as well as any error that occur.
+// The outputs of this function are the corresponding binary data as well as any error that occurs.
 func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map[string]interface{}) ([]byte, error) {
-	// JSON map -> JSON byte
+	//JSON map -> JSON byte
 	row, err := json.Marshal(jsonRow)
 	if err != nil {
 		return nil, err
 	}
-	// Create empty message
+	//create empty message
 	message := dynamicpb.NewMessage(message_descriptor)
 
-	// First, json byte -> proto message
+	// First, json->proto message
 	err = protojson.Unmarshal(row, message)
 	if err != nil {
 		return nil, err
@@ -183,14 +183,14 @@ func jsonToBinary(message_descriptor protoreflect.MessageDescriptor, jsonRow map
 	return b, nil
 }
 
-// From https://github.com/majst01/fluent-bit-go-redis-output.git
-// Function is used to transform fluent-bit record to a JSON map
+// from https://github.com/majst01/fluent-bit-go-redis-output.git
+// function is used to transform fluent-bit record to a JSON map
 func parseMap(mapInterface map[interface{}]interface{}) map[string]interface{} {
 	m := make(map[string]interface{})
 	for k, v := range mapInterface {
 		switch t := v.(type) {
 		case []byte:
-			// Prevent encoding to base64
+			// prevent encoding to base64
 			m[k.(string)] = string(t)
 		case map[interface{}]interface{}:
 			m[k.(string)] = parseMap(t)
@@ -214,10 +214,10 @@ var pluginGetResult = func(result *managedwriter.AppendResult, ctx context.Conte
 	return result.GetResult(ctx)
 }
 
-// This function is used for asynchronous WriteAPI response checking
-// It takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
-// And wait for the next ready response from WriteAPI
-// This function returns an int which is the length of the queue after being checked or -1 if an error occured
+// this function is used for asynchronous WriteAPI response checking
+// it takes in the relevant queue of responses as well as boolean that indicates whether we should block the AppendRows function
+// and wait for the next response from WriteAPI
+// This function returns an int which is the length of the queue after being checked or -1 if there was some error.
 func checkResponses(curr_ctx context.Context, streamSlice *[]*streamConfig, waitForResponse bool, exactlyOnceConf bool, id int, streamIndex int) int {
 	currQueuePointer := (*streamSlice)[streamIndex].appendResults
 	for len(*currQueuePointer) > 0 {
@@ -250,7 +250,7 @@ func checkAllStreamResponses(ctx context.Context, streamSlice **[]*streamConfig,
 	}
 }
 
-// This function gets the value of various configuration fields and returns an error if the field could not be parsed
+// this function gets the value of various configuration fields and returns an error if the field could not be parsed
 func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval T) (T, error) {
 	currstr := output.FLBPluginConfigKey(plugin, key)
 	finval := defaultval
@@ -275,12 +275,12 @@ func getConfigField[T int | bool](plugin unsafe.Pointer, key string, defaultval 
 	return finval, nil
 }
 
-// This function creates a new managed stream based on the config struct fields
+// this function creates a new managed stream based on the config struct fields
 func buildStream(ctx context.Context, config **outputConfig, streamIndex int) error {
 	currManagedStream, err := getWriter((*config).client, ctx, (*config).currProjectID,
 		managedwriter.WithType((*config).streamType),
 		managedwriter.WithDestinationTable((*config).tableRef),
-		// Use the descriptor proto when creating the new managed stream
+		//use the descriptor proto when creating the new managed stream
 		managedwriter.WithSchemaDescriptor((*config).schemaDesc),
 		managedwriter.EnableWriteRetries((*config).enableRetry),
 		managedwriter.WithMaxInflightBytes((*config).maxQueueBytes),
@@ -296,7 +296,7 @@ func buildStream(ctx context.Context, config **outputConfig, streamIndex int) er
 	return err
 }
 
-// This function returns whether or not the response indicates an invalid stream
+// this function returns whether or not the response indicates an invalid (garbage-collected) stream
 func rebuildPredicate(err error) bool {
 	if apiErr, ok := apierror.FromError(err); ok {
 		storageErr := &storagepb.StorageError{}
@@ -307,7 +307,7 @@ func rebuildPredicate(err error) bool {
 	return false
 }
 
-// This function sends and checks the responses for data through a committed stream with exactly once functionality
+// this function sends and checks the responses for data through a committed stream with exactly once functionality
 func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
@@ -318,7 +318,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 	if err != nil {
 		return err
 	}
-	// Synchronously check the response immediately after appending data with exactly once semantics
+	//synchronously check the response immediately after appending data with exactly once semantics
 	_, err = pluginGetResult(appendResult, ctx)
 	if err != nil {
 		return err
@@ -326,7 +326,7 @@ func sendRequestExactlyOnce(ctx context.Context, data [][]byte, config **outputC
 	return nil
 }
 
-// This function enables synchronous retries and rebuilding a valid stream based on the server response
+// this function enables synchronous retries and rebuilding a valid stream based on the server response
 func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	retryer := newStatelessRetryer((*config).numRetries)
 	attempt := 0
@@ -336,22 +336,21 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 		if err == nil {
 			break
 		}
-		// Unsuccesful data append
+		//unsuccesful data append
 		if rebuildPredicate(err) {
 			currStream.managedstream.Finalize(ctx)
 			currStream.managedstream.Close()
-			// Rebuild stream
 			err := buildStream(ctx, config, streamIndex)
 			if err != nil {
 				return err
 			}
-			// Retry sending data without incrementing number of attempts or waiting between attempts
+			//retry sending data without incrementing number of attempts or waiting between attempts
 		} else {
 			backoffPeriod, shouldRetry := retryer.Retry(err, attempt)
 			if !shouldRetry {
 				return err
 			}
-			// Retry sending data after incrementing attempt count and waiting for designated amount of time
+			//retry sending data after incrementing attempt count and wait for designated amount of time
 			attempt++
 			time.Sleep(backoffPeriod)
 		}
@@ -360,7 +359,7 @@ func sendRequestRetries(ctx context.Context, data [][]byte, config **outputConfi
 	return nil
 }
 
-// This function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
+// this function sends data and appends the responses to a queue to be checked asynchronously through a default stream with at least once functionality
 func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
@@ -375,7 +374,7 @@ func sendRequestDefault(ctx context.Context, data [][]byte, config **outputConfi
 	return nil
 }
 
-// This function cases on the exactly/at-least once functionality and sends the data accordingly
+// this function cases on the exactly/at-least once functionality and sends the data accordingly
 func sendRequest(ctx context.Context, data [][]byte, config **outputConfig, streamIndex int) error {
 	if len(data) > 0 {
 		if (*config).exactlyOnce {
@@ -387,7 +386,7 @@ func sendRequest(ctx context.Context, data [][]byte, config **outputConfig, stre
 	return nil
 }
 
-// This is a test-only method that provides the instance count for configMap
+// this is a test-only method that provides the instance count for configMap
 func getInstanceCount() int {
 	return len(configMap)
 }
@@ -405,7 +404,7 @@ func getLeastLoadedStream(streamSlice *[]*streamConfig) int {
 	return minStreamIndex
 }
 
-// This is a test-only method which takes in a config id and returns the current offset value of the struct corresponding to the id
+// this is a test-only method that provides the current offset of the passed in config struct
 func getOffset(id int) int64 {
 	config := configMap[id]
 	streamSlice := *config.managedStreamSlice
@@ -422,7 +421,7 @@ var setThreshold = func(maxQueueSize int) int {
 }
 
 // This function check whether there is room for scaling and the scales the number of stream dynamically depending on if it
-// Detects back pressure from the queue
+// detects back pressure from the queue
 func createNewStreamDynamicScaling(config **outputConfig) {
 	(*config).mutex.Lock()
 	defer (*config).mutex.Unlock()
@@ -451,8 +450,8 @@ func createNewStreamDynamicScaling(config **outputConfig) {
 	}
 }
 
-// This interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
-// With its actual methods.
+// this interface acts as a wrapper for the *managedwriter.Client type which the realManagedWriterClient struct implements
+// with its actual methods.
 type ManagedWriterClient interface {
 	NewManagedStream(ctx context.Context, opts ...managedwriter.WriterOption) (*managedwriter.ManagedStream, error)
 	GetWriteStream(ctx context.Context, req *storagepb.GetWriteStreamRequest, opts ...gax.CallOption) (*storagepb.WriteStream, error)
@@ -486,8 +485,8 @@ func (r *realManagedWriterClient) CreateWriteStream(ctx context.Context, req *st
 	return r.currClient.CreateWriteStream(ctx, req, opts...)
 }
 
-// This function acts as a wrapper for the managedwriter.NewClient function in order to inject a mock interface, one can
-// Override the getClient method to return a different struct type (that still implements the managedwriterclient interface)
+// this function acts as a wrapper for the managedwriter.NewClient function in order to inject a mock interface, one can
+// override the getClient method to return a different struct type (that still implements the managedwriterclient interface)
 var getClient = func(ctx context.Context, projectID string) (ManagedWriterClient, error) {
 	client, err := managedwriter.NewClient(ctx, projectID)
 	if err != nil {
@@ -504,13 +503,13 @@ type MWManagedStream interface {
 	StreamName() string
 }
 
-// To inject a mock interface, we can override getWriter and getContext
+// To inject a mock interface, I override getWriter and getContext
 var getWriter = func(client ManagedWriterClient, ctx context.Context, projectID string, opts ...managedwriter.WriterOption) (MWManagedStream, error) {
 	return client.NewManagedStream(ctx, opts...)
 }
 
 // This function acts as a wrapper for the GetContext function so that we may override it to
-// Mock it whenever needed
+// mock it whenever needed
 var getFLBPluginContext = func(ctx unsafe.Pointer) int {
 	return output.FLBPluginGetContext(ctx).(int)
 }
@@ -538,34 +537,34 @@ func finalizeCloseAllStreams(config **outputConfig, id int) bool {
 	return errFlag
 }
 
-// Export FLBPluginRegister
+//export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
 	return output.FLBPluginRegister(def, "writeapi", "Sends data to BigQuery through WriteAPI")
 }
 
-// Export FLBPluginInit
+//export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
-	// Set projectID, datasetID, and tableID from config file params
+	//set projectID, datasetID, and tableID from config file params
 	projectID := output.FLBPluginConfigKey(plugin, "ProjectID")
 	datasetID := output.FLBPluginConfigKey(plugin, "DatasetID")
 	tableID := output.FLBPluginConfigKey(plugin, "TableID")
 
-	// Set exactly-once bool from config file param
+	//set exactly-once bool from config file param
 	exactlyOnceVal, err := getConfigField(plugin, "Exactly_Once", exactlyOnceDefault)
 	if err != nil {
 		log.Printf("Invalid Exactly_Once parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
 
-	// Optional num synchronous retries parameter
-	// This value is only used when the exactly-once field is configured to true (as it describes synchronous retries)
+	//optional num synchronous retries parameter
+	//this value is only used when the exactly-once field is configured to true (as it describes synchronous retries)
 	numRetriesVal, err := getConfigField(plugin, "Num_Synchronous_Retries", numRetriesDefault)
 	if err != nil {
 		log.Printf("Invalid Num_Synchronous_Retries parameter in configuration file: %s", err)
 		return output.FLB_ERROR
 	}
 
-	// Optional maxchunksize param
+	//optional maxchunksize param
 	maxChunkSize_init, err := getConfigField(plugin, "Max_Chunk_Size", chunkSizeLimit)
 	if err != nil {
 		log.Printf("Invalid Max_Chunk_Size parameter in configuration file: %s", err)
@@ -576,7 +575,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		maxChunkSize_init = chunkSizeLimit
 	}
 
-	// Optional max queue size params
+	//optional max queue size params
 	maxQueueSize, err := getConfigField(plugin, "Max_Queue_Requests", queueRequestDefault)
 	if err != nil {
 		log.Printf("Invalid Max_Queue_Requests parameter in configuration file: %s", err)
@@ -596,24 +595,24 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	// Create new client
+	//create new client
 	client, err := getClient(ms_ctx, projectID)
 	if err != nil {
 		log.Printf("Creating a new managed BigQuery Storage write client scoped to: %s failed in FLBPluginInit: %s", projectID, err)
 		return output.FLB_ERROR
 	}
 
-	// Create stream name
+	// streamname
 	tableReference := fmt.Sprintf("projects/%s/datasets/%s/tables/%s", projectID, datasetID, tableID)
 
-	// Call getDescriptors to get the message descriptor, and descriptor proto
+	//use getDescriptors to get the message descriptor, and descriptor proto
 	md, descriptor, err := getDescriptors(ms_ctx, client, projectID, datasetID, tableID, dateTimeStringType)
 	if err != nil {
 		log.Printf("Getting message descriptor and descriptor proto for table: %s failed in FLBPluginInit: %s", tableReference, err)
 		return output.FLB_ERROR
 	}
 
-	// Set the stream type based on exactly once parameter
+	//set the stream type based on exactly once parameter
 	var currStreamType managedwriter.StreamType
 	var enableRetries bool
 	if exactlyOnceVal {
@@ -670,13 +669,13 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	return output.FLB_OK
 }
 
-// Export FLBPluginFlush
+//export FLBPluginFlush
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	log.Print("[multiinstance] Flush called for unknown instance")
 	return output.FLB_OK
 }
 
-// Export FLBPluginFlushCtx
+//export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
 	id := getFLBPluginContext(ctx)
 	// Locate stream in map
@@ -696,7 +695,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	dec := output.NewDecoder(data, int(length))
 	var binaryData [][]byte
 	var currsize int
-	// Keeps track of the number of rows previously sent
+	//keeps track of the number of rows previously sent
 	var rowCounter int64
 
 	// Find stream with least number of awaiting queue responses
@@ -714,13 +713,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 		rowJSONMap := parseMap(record)
 
-		// Serialize data
-		// Transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
+		//serialize data
+		//transform each row of data into binary using the jsonToBinary function and the message descriptor from the getDescriptors function
 		buf, err := jsonToBinary(config.messageDescriptor, rowJSONMap)
 		if err != nil {
 			log.Printf("Transforming row with value:%s from JSON to binary data for output instance with id: %d failed in FLBPluginFlushCtx: %s", rowJSONMap, id, err)
 		} else {
-			// Successful data transformation
+			//successful data transformation
 			if (currsize + len(buf)) >= config.maxChunkSize {
 				// Appending Rows
 				err := sendRequest(ms_ctx, binaryData, &config, leastLoadedStreamIndex)
@@ -739,7 +738,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 
 			}
 			binaryData = append(binaryData, buf)
-			// Include the protobuf overhead to the currsize variable
+			//include the protobuf overhead to the currsize variable
 			currsize += (len(buf) + 2)
 			rowCounter++
 		}
@@ -757,13 +756,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 	return output.FLB_OK
 }
 
-// Export FLBPluginExit
+//export FLBPluginExit
 func FLBPluginExit() int {
 	log.Print("[multiinstance] Exit called for unknown instance")
 	return output.FLB_OK
 }
 
-// Export FLBPluginExitCtx
+//export FLBPluginExitCtx
 func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	// Get context
 	id := output.FLBPluginGetContext(ctx).(int)
@@ -775,7 +774,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 		return output.FLB_ERROR
 	}
 
-	// Calls checkResponses, finalizes, and closes each stream
+	// Runs checkResponses on each stream and then finalizes and closes it
 	// If there is an error it preserves it and then continues to close and finalize all other streams
 	checkAllStreamResponses(ms_ctx, &config.managedStreamSlice, false, &config.mutex, config.exactlyOnce, id)
 	errFlag := finalizeCloseAllStreams(&config, id)
@@ -793,7 +792,7 @@ func FLBPluginExitCtx(ctx unsafe.Pointer) int {
 	return output.FLB_OK
 }
 
-// Export FLBPluginUnregister
+//export FLBPluginUnregister
 func FLBPluginUnregister(def unsafe.Pointer) {
 	log.Print("[multiinstance] Unregister called")
 	output.FLBPluginUnregister(def)
