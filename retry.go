@@ -13,7 +13,7 @@
 // limitations under the License.
 package main
 
-//these functions are based on: https://github.com/googleapis/google-cloud-go/blob/6a9c12a395245d8500c267437c2dfa897049a719/bigquery/storage/managedwriter/retry.go
+// These functions are based on: https://github.com/googleapis/google-cloud-go/blob/6a9c12a395245d8500c267437c2dfa897049a719/bigquery/storage/managedwriter/retry.go
 import (
 	"errors"
 	"io"
@@ -27,14 +27,14 @@ import (
 )
 
 // This retry predicate is used for higher level retries, enqueing appends onto to a bidi
-// channel and evaluating whether an append should be retried (re-enqueued).
+// Channel and evaluating whether an append should be retried (re-enqueued).
 func retryPredicate(err error) (shouldRetry bool) {
 	if err == nil {
 		return
 	}
 
 	s, ok := status.FromError(err)
-	// non-status based error conditions.
+	// Non-status based error conditions.
 	if !ok {
 		// EOF can happen in the case of connection close.
 		if errors.Is(err, io.EOF) {
@@ -56,7 +56,7 @@ func retryPredicate(err error) (shouldRetry bool) {
 	case codes.ResourceExhausted:
 		if strings.HasPrefix(s.Message(), "Exceeds 'AppendRows throughput' quota") {
 			// Note: internal b/246031522 opened to give this a structured error
-			// and avoid string parsing.  Should be a QuotaFailure or similar.
+			// And avoid string parsing.  Should be a QuotaFailure or similar.
 			shouldRetry = true
 			return
 		}
@@ -64,9 +64,9 @@ func retryPredicate(err error) (shouldRetry bool) {
 	return
 }
 
-// statelessRetryer is used for backing off within a continuous process, like processing the responses
-// from the receive side of the bidi stream.  An individual item in that process has a notion of an attempt
-// count, and we use maximum retries as a way of evicting bad items.
+// StatelessRetryer is used for backing off within a continuous process, like processing the responses
+// From the receive side of the bidi stream.  An individual item in that process has a notion of an attempt
+// Count, and we use maximum retries as a way of evicting bad items.
 type statelessRetryer struct {
 	mu sync.Mutex // guards r
 	r  *rand.Rand

@@ -3,7 +3,7 @@
 This README includes all the necessary information to use the WriteAPI output plugin, which allows you to stream records into Google Cloud BigQuery. This implementation only supports the following formats:
 - JSON files
 
-Currently, the plugin will stream any JSON formatted data. This data must be present in a given path and formatted to match the schema for the table regarding the type of the data. Refer to the Error Handling section for more information.
+Currently, the plugin is able to stream any JSON formatted data. This data must be present in a given input path and formatted to match the corresponding BigQuery table schema. Refer to the Accepted Data Type for each BigQuery Field section for more information.
 
 ## Creating a BigQuery Dataset and Table
 Fluentbit does not create the dataset and table for your data, so you must create these ahead of time. 
@@ -58,7 +58,7 @@ Here is an example of a `INPUT` section:
     Parser  json
     Tag     logfile1
 ```
-This establishes an input with the name `tail` with a specified path which uses the `json` parser specified in the `SERVICES` section. The tag is the most important part to take note of here, as this will be used to find matches for relevant outputs. The paths here is the absolute or relative path to the file. 
+This establishes an input (with a specified path) which uses the `tail` input plugin and `json` parser specified in the `SERVICES` section. The tag is an important field, as it is used to route data and match with relevant outputs. The path parameter can be an absolute or relative path to the file. 
 
 Here is an example of an `OUTPUT` section:
 ```
@@ -76,7 +76,7 @@ Here is an example of an `OUTPUT` section:
     Num_Synchronous_Retries            4
     DateTime_String_Type               True
 ```
-This establishes an output with the name `writeapi` which matches any input with a tag of `logfile*`. The match uses regex, so the input from above would lead to this output. The next three lines describe the destination table in BigQuery. The format relates to how the file should be parsed and the five lines after relate to how you want the stream to send data. For an absolute basic use of the WriteAPI Output Plugin, the first six fields are required and the rest have default values that are shown above.
+This establishes an output using the `writeapi` plugin which matches to any input with a tag of `logfile*`. The tag-match uses regex, so the input (with tag logfile1) from above would be routed to this output. The next three fields describe the destination table in BigQuery. The `format` parameter is optional and relates to how the file should be parsed. The next six fields are also optional and configure stream settings based on how you want to ingest data into BigQuery. The first five fields are mandatory for the plugin to run. The last seven are optional, and have default values corresponding to those shown above.
 
 The `Max_Chunk_Size` field takes in the number of bytes that the plugin will attempt to chunk data into before appending into the BigQuery Table. Fluent-Bit supports around a maximum of 2 MB of data within a single flush and we exercise a hard maximum of 9 MB (as BigQuery cannot handle appending data larger than this size). The `Max_Queue_Requests` and `Max_Queue_Bytes` fields describe the maximum number of requests/bytes of outstanding asynchronous responses that can be queued. When the first limit is reached, data appending will be blocked until enough responses are ready and the number of outstanding requests/bytes decreases. 
 
@@ -119,7 +119,7 @@ The plugin is designed to log and handle both client-side and server-side errors
 Regardless of the type of error, the plugin is built to maintain the flow of incoming data, ensuring that operations continue smoothly and that any issues are documented for troubleshooting.
 
 ## Backpressure and Buffering
-This plugin utilizes dynamic stream scaling up when the rate of data being sent from Fluent Bit is too great for a single managed stream. Currently, dynamic scaling is only supported for teh default stream, as it is dependent on the `Max_Queue_Requests` field. However, to manage backpressure from the input/source to Fluent Bit itself, Fluent Bit implements its own buffering system where processed data is temporarily stored before being sent out. Fluent Bit primarily uses memory for buffering but can also utilize filesystem-based buffering for enhanced data safety.
+This plugin utilizes dynamic stream scaling up when the rate of data being sent from Fluent Bit is too great for a single managed stream. Currently, dynamic scaling is only supported for the default stream type. However, to manage backpressure from the input/source to Fluent Bit itself, Fluent Bit implements its own buffering system where processed data is temporarily stored before being sent out. Fluent Bit primarily uses memory for buffering but can also utilize filesystem-based buffering for enhanced data safety.
 
 - Memory Buffering: Fluent Bit stores data chunks in memory by default. This method is fast but can lead to high memory usage under heavy load or network delays. To manage this, you can set a `Mem_Buf_Limit` field in the input section of the configuration field, which will restrict the memory used by an input plugin, pausing data ingestion when the limit is reached. For example, when using the tail input plugin (utilized to read log/text files), memory buffering is often sufficient due to its ability to track log offsets which minimizes data loss during pauses.
 - Filesystem Buffering: For greater data safety, filesystem buffering can be used. This requires finding a relevant input plugin that configures the `storage.type` to filesystem in its settings. This method stores data chunks both in memory and on disk, which gives control over memory usage.
